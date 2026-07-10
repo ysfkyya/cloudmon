@@ -1,0 +1,21 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
+# Virtual environment
+venv/
+.venv/
+
+# Environment and secrets
+.env
+*.env
+
+# Generated data/results
+results/
+data/
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
