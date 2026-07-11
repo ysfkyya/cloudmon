@@ -30,7 +30,7 @@ from sklearn.metrics      import (
 )
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-from config import RISK_HORIZON, RESULTS_DIR, DATA_DIR
+from config import RISK_HORIZON, RESULTS_DIR, DATA_DIR, TRAIN_END_DATE, END_DATE
 
 _MODEL_DIR = os.path.join(DATA_DIR, "processed", "models")
 os.makedirs(_MODEL_DIR, exist_ok=True)
@@ -199,7 +199,8 @@ def _plot_risk_timeline(results: dict) -> None:
     y_proba = results["models"][best_m]["y_proba"]
 
     fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(14, 6), sharex=True)
-    fig.suptitle(f"Risk Zaman Çizelgesi — {best_m} (Test: May–Haz 2025)", fontsize=11)
+    test_period = f"{pd.Timestamp(TRAIN_END_DATE).strftime('%b %Y')} – {pd.Timestamp(END_DATE).strftime('%b %Y')}"
+    fig.suptitle(f"Risk Zaman Çizelgesi — {best_m} (Test: {test_period})", fontsize=11)
 
     ax1.fill_between(ts, y_test, alpha=0.5, color="crimson", label="Gerçek Risk")
     ax1.set_ylabel("Risk Etiketi (0/1)")

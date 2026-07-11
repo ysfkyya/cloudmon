@@ -121,6 +121,7 @@ with st.sidebar:
         "🩺  Sağlık Sınıflandırması",
         "🔍  SHAP Açıklanabilirlik",
         "💡  Operasyonel Öneriler",
+        "🤖  LLM Öneri Karşılaştırması",
     ], label_visibility="collapsed")
 
     st.divider()
@@ -705,10 +706,14 @@ elif page.startswith("📊"):
 #  KAPASİTE TAHMİNİ
 # ═══════════════════════════════════════════════════════════════════════════════
 elif page.startswith("📈"):
+    from config import FORECAST_HORIZONS, TRAIN_END_DATE, END_DATE, START_DATE
     st.title("📈 Kapasite Tahmini")
-    st.markdown("""<div class="box">
-    <b>3 model</b> (LR, RF, GBT) × <b>3 kaynak</b> (CPU, Bellek, Disk) × <b>2 ufuk</b> (24h, 72h) = 18 model.
-    Eğitim: Eyl 2025–Mar 2026 · Test: Nis–Haz 2026 (zamansal bölünmüş).
+    n_models   = 3 * len(FORECAST_HORIZONS)  # 3 kaynak × N ufuk
+    test_period = f"{pd.Timestamp(TRAIN_END_DATE).strftime('%b %Y')} – {pd.Timestamp(END_DATE).strftime('%b %Y')}"
+    horizon_str = " / ".join(f"{h}h" for h in FORECAST_HORIZONS)
+    st.markdown(f"""<div class="box">
+    <b>3 model</b> (LR, RF, GBT) × <b>3 kaynak</b> (CPU, Bellek, Disk) × <b>{len(FORECAST_HORIZONS)} ufuk</b> ({horizon_str}) = {3 * 3 * len(FORECAST_HORIZONS)} model.
+    Eğitim: {pd.Timestamp(START_DATE).strftime('%b %Y')} – {pd.Timestamp(TRAIN_END_DATE).strftime('%b %Y')} · Test: {test_period} (zamansal bölünmüş).
     ★ simgesi: her kaynak–ufuk çifti için en düşük RMSE.
     </div>""", unsafe_allow_html=True)
 
@@ -737,11 +742,12 @@ elif page.startswith("📈"):
             })
     df_res = pd.DataFrame(rows)
 
-    tab24, tab72 = st.tabs(["24 Saatlik Ufuk", "72 Saatlik Ufuk"])
+    horizon_tabs = st.tabs([f"{h} Saatlik Ufuk" for h in FORECAST_HORIZONS])
 
-    for tab, horizon in [(tab24, "24s"), (tab72, "72s")]:
+    for tab, horizon in zip(horizon_tabs, FORECAST_HORIZONS):
         with tab:
-            sub = df_res[df_res["Ufuk"] == horizon].drop(columns="Ufuk").copy()
+            horizon_key = f"{horizon}s"
+            sub = df_res[df_res["Ufuk"] == horizon_key].drop(columns="Ufuk").copy()
             best_set = set()
             for kaynak in sub["Kaynak"].unique():
                 idx = sub[sub["Kaynak"] == kaynak]["RMSE"].idxmin()
@@ -847,9 +853,11 @@ elif page.startswith("🔍"):
     Test setinden 500 örneklem üzerinde çalışır.
     </div>""", unsafe_allow_html=True)
 
+    from config import FORECAST_HORIZONS
     tab_cpu, tab_mem, tab_disk, tab_sag = st.tabs([
         "CPU Tahmini", "Bellek Tahmini", "Disk Tahmini", "Sağlık Riski",
     ])
+    _shap_horizons = FORECAST_HORIZONS
 
     def _shap_sec(res_key, horizon, title, yorum):
         show_image(fig_path(f"shap_capacity_bar_{res_key}_{horizon}h.png"),
@@ -868,21 +876,22 @@ elif page.startswith("🔍"):
         st.markdown(f'<div class="box">{yorum}</div>', unsafe_allow_html=True)
 
     with tab_cpu:
-        h = st.radio("Ufuk", [24, 72], horizontal=True, key="sh_cpu")
+        h = st.radio("Ufuk", _shap_horizons, horizontal=True, key="sh_cpu")
         _shap_sec("cpu_usage_percent", h, f"CPU — {h}s ufku",
                   "CPU tahmini için <b>kısa vadeli hareketli ortalama</b> (cpu_rmean_3h, cpu_lag_1h) "
                   "en yüksek SHAP değerini alır: CPU kullanımı güçlü süreklilik gösterir. "
                   "Incident dönemlerinde <b>log hata sayımları ve gecikme metrikleri</b> devreye girer.")
 
     with tab_mem:
-        h2 = st.radio("Ufuk", [24, 72], horizontal=True, key="sh_mem")
+        h2 = st.radio("Ufuk", _shap_horizons, horizontal=True, key="sh_mem")
         _shap_sec("memory_usage_percent", h2, f"Bellek — {h2}s ufku",
                   "Bellek yavaş artış trendine sahip olduğundan <b>week_of_year</b> ve "
                   "<b>168h hareketli ortalama</b> önemli rol oynar. "
                   "VM yaratma patlamalarında <b>vm_count lag</b> özellikleri de belirleyici.")
 
     with tab_disk:
-        _shap_sec("disk_usage_percent", 72, "Disk — 72s ufku",
+        h3 = st.radio("Ufuk", _shap_horizons, horizontal=True, key="sh_disk")
+        _shap_sec("disk_usage_percent", h3, f"Disk — {h3}s ufku",
                   "<b>disk_rmean_168h</b> ve <b>week_of_year</b> temel belirleyici: "
                   "disk monoton artar. Negatif R² disk tahmininin zorluğunu gösterir; "
                   "lineer ekstrapolasyon bu modeli tamamlamak için kullanılır.")
@@ -917,10 +926,15 @@ elif page.startswith("💡"):
     Sağlık riski (48s pencere ortalaması) · Trend bozulması (7g/7g karşılaştırma).
     </div>""", unsafe_allow_html=True)
 
-    recs = load_json("recommendations.json")
-    if not recs:
+    rec_data = load_json("recommendations.json")
+    if not rec_data:
         st.warning("Öneri dosyası bulunamadı.")
         st.stop()
+
+    # Yeni format: {"recommendations": [...], "capacity_summary": {...}, "error_summary": {...}}
+    recs     = rec_data.get("recommendations", rec_data) if isinstance(rec_data, dict) else rec_data
+    cap_sum  = rec_data.get("capacity_summary", {}) if isinstance(rec_data, dict) else {}
+    err_sum  = rec_data.get("error_summary",    {}) if isinstance(rec_data, dict) else {}
 
     n_c = sum(1 for r in recs if r.get("severity") == "critical")
     n_w = sum(1 for r in recs if r.get("severity") == "warning")
@@ -932,22 +946,70 @@ elif page.startswith("💡"):
     c4.metric("🔵 Bilgi",  n_i)
     st.divider()
 
+    # ── Kapasite bitiş tarihleri ───────────────────────────────────────────────
+    if cap_sum:
+        st.subheader("Kapasite Dolum Tahmini")
+        _cap_labels = {
+            "cpu_usage_percent":    ("CPU", "#e53e3e"),
+            "memory_usage_percent": ("Bellek", "#f59e0b"),
+            "disk_usage_percent":   ("Disk", "#3b82f6"),
+        }
+        cc1, cc2, cc3 = st.columns(3)
+        for col_w, (col_key, (lbl, clr)) in zip([cc1, cc2, cc3], _cap_labels.items()):
+            info = cap_sum.get(col_key, {})
+            cur  = info.get("current_value", "?")
+            est  = info.get("estimated_date")
+            days = info.get("days_to_threshold")
+            stb  = info.get("stable", False)
+            trend = info.get("daily_trend", 0)
+            with col_w:
+                if stb or est is None:
+                    col_w.metric(f"📅 {lbl} Bitiş", "Kararlı", f"+{trend:.3f}%/gün")
+                else:
+                    col_w.metric(f"📅 {lbl} Bitiş", est, f"~{int(days)} gün | %{cur:.1f} şu an")
+        st.divider()
+
+    # ── Haftalık hata özeti ────────────────────────────────────────────────────
+    if err_sum:
+        st.subheader("7 Günlük Hata Karşılaştırması")
+        err_rows = []
+        for label, data in err_sum.items():
+            err_rows.append({
+                "Hata Tipi":    label,
+                "Son 7 Gün":   f"{data['last_7d']:,}",
+                "Önceki 7 Gün": f"{data['prev_7d']:,}",
+                "Değişim":      f"{data['change_pct']:+.0f}%",
+                "Durum":        "⚠️ YÜKSEK" if data.get("high") else "Normal",
+            })
+        st.dataframe(pd.DataFrame(err_rows), width='stretch', hide_index=True)
+        st.divider()
+
     _sm = {
-        "critical": ("🔴","KRITIK","rec-critical","badge-c"),
+        "critical": ("🔴","KRİTİK","rec-critical","badge-c"),
         "warning":  ("🟡","UYARI", "rec-warning", "badge-w"),
-        "info":     ("🔵","BİLGİ","rec-info",    "badge-i"),
+        "info":     ("🔵","BİLGİ", "rec-info",    "badge-i"),
     }
-    _cat = {"KAPASITE":"Kaynak Kapasitesi","SAĞLIK":"Servis Sağlığı","TREND":"Metrik Trendi"}
+    _cat = {
+        "KAPASİTE": "Kapasite",
+        "SAĞLIK":   "Servis Sağlığı",
+        "TREND":    "Metrik Trendi",
+        "STAJ":     "Staj Dönemi",
+    }
 
     for i, rec in enumerate(recs, 1):
         sev = rec.get("severity","info")
         icon, label, css, badge = _sm.get(sev, ("🔵","BİLGİ","rec-info","badge-i"))
         acts = "".join(f"<li>{a}</li>" for a in rec.get("actions",[]))
+        cat_label = _cat.get(rec.get("category",""), rec.get("category",""))
+        est_line  = ""
+        if rec.get("estimated_date"):
+            est_line = f'<span style="color:#e53e3e;font-size:.85rem;"> 📅 Tahmini eşik: <b>{rec["estimated_date"]}</b></span>'
         st.markdown(f"""
         <div class="{css}">
           <div style="margin-bottom:6px;">
             {icon} <span class="{badge}">{label}</span>
-            <span style="font-size:.82rem;color:#6b7280;"> #{i} · {_cat.get(rec.get('category',''),rec.get('category',''))}</span>
+            <span style="font-size:.82rem;color:#6b7280;"> #{i} · {cat_label}</span>
+            {est_line}
           </div>
           <div style="font-weight:600;font-size:1.05rem;margin-bottom:6px;">{rec.get('title','')}</div>
           <div style="font-size:.92rem;color:#374151;margin-bottom:8px;">{rec.get('detail','')}</div>
@@ -965,3 +1027,182 @@ elif page.startswith("💡"):
             st.code(open(txt_path, encoding="utf-8").read(), language=None)
         with open(txt_path, "rb") as f:
             st.download_button("📥 Raporu İndir (.txt)", f, file_name="recommendations.txt")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  LLM ÖNERİ KARŞILAŞTIRMASI
+# ═══════════════════════════════════════════════════════════════════════════════
+elif page.startswith("🤖"):
+    st.title("🤖 LLM Öneri Karşılaştırması")
+    st.markdown("""<div class="box">
+    Aynı sistem bağlamı (metrik özeti + SHAP özellikleri + hata örüntüleri) hem
+    <b>Claude Sonnet (Anthropic)</b> hem <b>GPT-4o (OpenAI)</b> modeline gönderilir.
+    Yanıtlar yan yana karşılaştırılır. API anahtarlarınızı girin ve <b>Analiz Et</b>'e tıklayın.
+    </div>""", unsafe_allow_html=True)
+
+    if not results_exist():
+        st.warning("Önce pipeline'ı çalıştırın (sidebar → 🔄 Pipeline'ı Yeniden Çalıştır).")
+        st.stop()
+
+    # ── API Anahtarları ───────────────────────────────────────────────────────
+    with st.expander("🔑 API Anahtarları", expanded=True):
+        col_k1, col_k2 = st.columns(2)
+        with col_k1:
+            anthropic_key = st.text_input(
+                "Anthropic API Key",
+                value=os.environ.get("ANTHROPIC_API_KEY", ""),
+                type="password",
+                placeholder="sk-ant-...",
+            )
+        with col_k2:
+            openai_key = st.text_input(
+                "OpenAI API Key",
+                value=os.environ.get("OPENAI_API_KEY", ""),
+                type="password",
+                placeholder="sk-...",
+            )
+        if not anthropic_key and not openai_key:
+            st.info("En az bir API anahtarı girin.")
+
+    # ── Analiz Et butonu ──────────────────────────────────────────────────────
+    run_btn = st.button(
+        "🚀 Analiz Et",
+        type="primary",
+        disabled=(not anthropic_key and not openai_key),
+        use_container_width=True,
+    )
+
+    if run_btn:
+        sys.path.insert(0, BASE)
+        from src.recommendations.llm_advisor import LLMAdvisor, PROVIDERS
+        from src.preprocessing.feature_engineering import build_feature_matrix
+
+        with st.spinner("Veriler hazırlanıyor…"):
+            try:
+                metrics_df = pd.read_csv(os.path.join(DATA_DIR, "raw", "metrics.csv"),
+                                         parse_dates=["timestamp"])
+                log_df     = pd.read_csv(os.path.join(DATA_DIR, "raw", "log_features.csv"),
+                                         parse_dates=["timestamp"])
+                feature_df = build_feature_matrix(metrics_df, log_df)
+
+                cap_res    = load_json("capacity_results.json")
+                health_res = load_json("health_results.json")
+
+                # SHAP CSV'lerinden top özellikleri yükle
+                shap_health = {}
+                shap_h_path = os.path.join(REP_DIR, "shap_health.csv")
+                if os.path.exists(shap_h_path):
+                    df_sh = pd.read_csv(shap_h_path)
+                    shap_health = {"top_features": df_sh.head(10).to_dict("records")}
+
+                shap_cap = {}
+                for fname in os.listdir(REP_DIR):
+                    if fname.startswith("shap_capacity_cpu") and fname.endswith(".csv"):
+                        df_sc = pd.read_csv(os.path.join(REP_DIR, fname))
+                        shap_cap["cpu_24h"] = {"top_features": df_sc.head(5).to_dict("records")}
+                        break
+
+                advisor = LLMAdvisor(
+                    anthropic_key=anthropic_key,
+                    openai_key=openai_key,
+                )
+            except Exception as e:
+                st.error(f"Veri yükleme hatası: {e}")
+                st.stop()
+
+        # ── Önerileri yükle (LLM prompt'a verilecek) ─────────────────────────
+        rec_json   = load_json("recommendations.json")
+        saved_recs = rec_json.get("recommendations", []) if isinstance(rec_json, dict) else []
+
+        # ── LLM çağrıları ─────────────────────────────────────────────────────
+        with st.spinner("LLM modelleri sorgulanıyor…"):
+            result = advisor.get_recommendations(
+                feature_df,
+                shap_health,
+                shap_cap,
+                capacity_results=cap_res,
+                recommendations=saved_recs,
+            )
+
+        responses = result.get("responses", {})
+
+        # ── Gönderilen prompt ─────────────────────────────────────────────────
+        with st.expander("📋 Gönderilen Prompt (her iki modele aynısı)"):
+            st.code(result.get("prompt", ""), language=None)
+
+        # ── Sistem bağlamı özeti ──────────────────────────────────────────────
+        ctx  = result.get("context", {})
+        ms   = ctx.get("metric_summary", {})
+        cdates = ctx.get("capacity_dates", {})
+        staj   = ctx.get("staj_status",   {})
+        if ms:
+            st.subheader("Sistem Bağlamı")
+            c1, c2, c3, c4, c5 = st.columns(5)
+            c1.metric("CPU (ort)",     f"%{ms.get('cpu_mean', 0):.1f}")
+            c2.metric("Bellek (ort)",  f"%{ms.get('mem_mean', 0):.1f}")
+            c3.metric("Disk (ort)",    f"%{ms.get('disk_mean', 0):.1f}")
+            c4.metric("Latency (ort)", f"{ms.get('latency_mean', 0):.0f} ms")
+            c5.metric("Hata (ort)",    f"%{ms.get('error_mean', 0):.2f}")
+
+        if cdates:
+            st.subheader("Kapasite Bitiş Tahminleri")
+            dc1, dc2, dc3 = st.columns(3)
+            _dl = {"cpu_usage_percent": "CPU", "memory_usage_percent": "Bellek", "disk_usage_percent": "Disk"}
+            for col_w, (col_key, lbl) in zip([dc1, dc2, dc3], _dl.items()):
+                info = cdates.get(col_key, {})
+                est  = info.get("estimated_date")
+                days = info.get("days_to_threshold")
+                stb  = info.get("stable", False)
+                if stb or est is None:
+                    col_w.metric(f"📅 {lbl} Bitiş", "Kararlı")
+                else:
+                    col_w.metric(f"📅 {lbl} Bitiş", est, f"~{int(days)} gün")
+
+        if staj.get("active"):
+            s = staj["active"]
+            st.info(f"⚡ **Aktif Staj:** {s['name']} — {s['start']} → {s['end']} ({s.get('days_left','?')} gün kaldı)")
+        elif staj.get("upcoming"):
+            s = staj["upcoming"]
+            st.warning(f"📅 **Yaklaşan Staj:** {s['name']} — {s['start']} ({s.get('days_to','?')} gün sonra)")
+
+        st.divider()
+
+        # ── Yanıtlar yan yana ────────────────────────────────────────────────
+        st.subheader("Model Yanıtları")
+        provider_keys = ["claude", "openai"]
+        cols = st.columns(len(provider_keys))
+
+        for col, pkey in zip(cols, provider_keys):
+            info   = PROVIDERS.get(pkey, {})
+            resp   = responses.get(pkey, {})
+            status = resp.get("status", "skipped")
+            label  = info.get("label", pkey)
+            color  = info.get("color", "#666")
+
+            with col:
+                st.markdown(
+                    f'<div style="border-top:4px solid {color};padding-top:8px;'
+                    f'margin-bottom:12px;font-weight:700;font-size:1.05rem;">'
+                    f'{label}</div>',
+                    unsafe_allow_html=True,
+                )
+
+                if status == "ok":
+                    st.markdown(resp.get("text", ""))
+                elif status == "skipped":
+                    st.info(f"API anahtarı girilmedi — {label} atlandı.")
+                else:
+                    st.error(f"Hata: {resp.get('error', 'bilinmeyen hata')}")
+
+        # ── JSON indirme ──────────────────────────────────────────────────────
+        st.divider()
+        st.download_button(
+            "📥 Yanıtları JSON olarak indir",
+            data=json.dumps(
+                {k: {"status": v["status"], "text": v.get("text", ""), "error": v.get("error", "")}
+                 for k, v in responses.items()},
+                ensure_ascii=False, indent=2
+            ),
+            file_name="llm_recommendations.json",
+            mime="application/json",
+        )

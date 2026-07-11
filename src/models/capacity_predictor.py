@@ -25,7 +25,7 @@ from sklearn.preprocessing    import StandardScaler
 from sklearn.metrics          import mean_absolute_error, mean_squared_error, r2_score
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-from config import CAPACITY_TARGETS, FORECAST_HORIZONS, THRESHOLDS, RESULTS_DIR, DATA_DIR
+from config import CAPACITY_TARGETS, FORECAST_HORIZONS, THRESHOLDS, RESULTS_DIR, DATA_DIR, TRAIN_END_DATE, END_DATE
 
 _MODEL_DIR = os.path.join(DATA_DIR, "processed", "models")
 os.makedirs(_MODEL_DIR, exist_ok=True)
@@ -185,7 +185,8 @@ def _plot_forecasts(results: dict) -> None:
     n_rows = len(CAPACITY_TARGETS)
     fig, axes = plt.subplots(n_rows, len(FORECAST_HORIZONS),
                               figsize=(14, 4 * n_rows), squeeze=False)
-    fig.suptitle("Kapasite Tahmin Sonuçları — Test Dönemi (May–Haz 2025)", fontsize=12)
+    test_period = f"{pd.Timestamp(TRAIN_END_DATE).strftime('%b %Y')} – {pd.Timestamp(END_DATE).strftime('%b %Y')}"
+    fig.suptitle(f"Kapasite Tahmin Sonuçları — Test Dönemi ({test_period})", fontsize=12)
 
     for r_idx, col in enumerate(CAPACITY_TARGETS):
         for h_idx, h in enumerate(FORECAST_HORIZONS):
@@ -229,31 +230,68 @@ def predict_days_to_threshold(feature_df: pd.DataFrame,
                                capacity_results: dict,
                                col: str = "disk_usage_percent") -> dict:
     """
-    Verilen kaynak için eşik değerine kaç gün kaldığını lineer ekstrapolasyonla tahmin eder.
-    Son 72 saatin trend bilgisini kullanır.
-    """
-    ts    = feature_df.index[-1]
-    vals  = feature_df[col].dropna().values
-    if len(vals) < 72:
-        return {"days_to_threshold": None}
+    Verilen kaynak için eşik değerine kaç gün kaldığını tahmin eder.
 
-    recent  = vals[-72:]
-    x       = np.arange(len(recent), dtype=float)
-    slope   = np.polyfit(x, recent, 1)[0]      # saat başına değişim
-    current = recent[-1]
+    30 günlük (720 saatlik) pencerede günlük medyan değişimi kullanır —
+    kısa vadeli spike'lara karşı polyfit'ten çok daha dayanıklı.
+    Dönüş dict'inde 'estimated_date' alanı gerçek takvim tarihi içerir.
+    """
+    last_ts = feature_df.index[-1]
+    vals    = feature_df[col].dropna().values
+    if len(vals) < 48:
+        return {"days_to_threshold": None, "estimated_date": None}
+
+    # 30 gün (720 saat) ya da mevcut veri — hangisi kısaysa
+    window = min(720, len(vals) - 24)
+    recent = vals[-window:]
+
+    # Günlük değişim dizisi (gürültüyü bastırmak için 24 saatlik farklar)
+    daily_changes = np.array(
+        [recent[i + 24] - recent[i] for i in range(0, len(recent) - 24)]
+    )
+
+    # Medyan slope — aykırı değerlere karşı dayanıklı
+    slope_per_day = float(np.median(daily_changes))
+
+    current = float(recent[-1])
     thr     = THRESHOLDS.get(col, 90.0)
 
-    if slope <= 0 or current >= thr:
-        days = None
-    else:
-        hours_left = (thr - current) / slope
-        days       = round(hours_left / 24, 1)
+    # Stabil veya azalan trend
+    if slope_per_day < 0.02:
+        return {
+            "resource":          col,
+            "current_value":     round(current, 2),
+            "threshold":         thr,
+            "daily_trend":       round(slope_per_day, 4),
+            "days_to_threshold": None,
+            "estimated_date":    None,
+            "stable":            True,
+            "as_of":             str(last_ts),
+        }
+
+    # Eşik zaten aşıldıysa
+    if current >= thr:
+        return {
+            "resource":          col,
+            "current_value":     round(current, 2),
+            "threshold":         thr,
+            "daily_trend":       round(slope_per_day, 4),
+            "days_to_threshold": 0,
+            "estimated_date":    str(last_ts.date()),
+            "stable":            False,
+            "as_of":             str(last_ts),
+        }
+
+    days_left   = (thr - current) / slope_per_day
+    target_date = last_ts + pd.Timedelta(days=days_left)
 
     return {
-        "resource":           col,
-        "current_value":      round(current, 2),
-        "threshold":          thr,
-        "hourly_trend":       round(slope, 4),
-        "days_to_threshold":  days,
-        "as_of":              str(ts),
+        "resource":          col,
+        "current_value":     round(current, 2),
+        "threshold":         thr,
+        "daily_trend":       round(slope_per_day, 4),
+        "days_to_threshold": round(days_left, 0),
+        "estimated_date":    str(target_date.date()),
+        "stable":            False,
+        "as_of":             str(last_ts),
     }

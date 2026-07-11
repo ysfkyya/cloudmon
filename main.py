@@ -3,7 +3,7 @@ main.py — Bulut Altyapısı Proaktif İzleme ve Karar Destek Sistemi
 
 Pipeline adımları
 -----------------
-1. Veri üretimi   : 6 aylık sentetik metrik + log verisi
+1. Veri üretimi   : config'den alınan tarih aralığında sentetik metrik + log verisi
 2. Özellik müh.   : rolling, lag, delta, zaman ve log özellikleri
 3. Kapasite tahm. : CPU / Bellek / Disk için 24h ve 72h regresyon modelleri
 4. Sağlık sınıf.  : Binary risk sınıflandırması (sonraki 4 saatte risk var mı?)
