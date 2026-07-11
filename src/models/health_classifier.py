@@ -125,6 +125,7 @@ def train_health_models(dataset: dict) -> dict:
     _plot_roc_curves(results)
     _plot_confusion_matrices(results)
     _plot_risk_timeline(results)
+    _plot_calibration_curve(results)
 
     return results
 
@@ -185,6 +186,39 @@ def _plot_confusion_matrices(results: dict) -> None:
     plt.suptitle("Karmaşıklık Matrisleri — Test Dönemi", fontsize=11)
     plt.tight_layout()
     out = os.path.join(RESULTS_DIR, "figures", "health_confusion_matrices.png")
+    plt.savefig(out, dpi=150, bbox_inches="tight")
+    plt.close()
+    print(f"  → {out}")
+
+
+def _plot_calibration_curve(results: dict) -> None:
+    """Reliability Diagram: tahmin edilen olasılık vs gerçek pozitif oranı."""
+    from sklearn.calibration import calibration_curve
+
+    fig, ax = plt.subplots(figsize=(7, 6))
+    colors  = ["steelblue", "darkorange", "green"]
+    y_test  = results["y_test"]
+
+    for (mname, mv), color in zip(results["models"].items(), colors):
+        try:
+            prob_true, prob_pred = calibration_curve(
+                y_test, mv["y_proba"], n_bins=10, strategy="uniform"
+            )
+            ax.plot(prob_pred, prob_true, marker="o", linewidth=1.5, color=color,
+                    label=f"{mname}  (AUC={mv['AUC-ROC']:.3f})")
+        except Exception:
+            pass
+
+    ax.plot([0, 1], [0, 1], "k--", linewidth=1.0, label="Mükemmel kalibrasyon")
+    ax.fill_between([0, 1], [0, 1], alpha=0.05, color="gray")
+    ax.set_xlabel("Tahmin Edilen Olasılık")
+    ax.set_ylabel("Gerçek Pozitif Oranı")
+    ax.set_title(f"Reliability Diagram — Sağlık Riski Olasılık Kalibrasyonu ({RISK_HORIZON}s ufuk)")
+    ax.legend(fontsize=9)
+    ax.set_xlim(0, 1)
+    ax.set_ylim(0, 1)
+    plt.tight_layout()
+    out = os.path.join(RESULTS_DIR, "figures", "health_calibration.png")
     plt.savefig(out, dpi=150, bbox_inches="tight")
     plt.close()
     print(f"  → {out}")

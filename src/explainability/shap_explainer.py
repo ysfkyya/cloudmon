@@ -59,51 +59,62 @@ def explain_capacity(capacity_results: dict,
             fnames  = ds["feature_names"]
             X_test  = ds["X_test"]
 
-            # Ağaç tabanlı modeller için TreeExplainer
+            import joblib
+            from config import DATA_DIR
+            model_path = os.path.join(
+                DATA_DIR, "processed", "models",
+                f"capacity_{col}_{horizon}h_{best_m.lower().replace(' ', '_')}.pkl",
+            )
+            pkg   = joblib.load(model_path)
+            model = pkg["model"]
+
+            # Büyük test setlerinde örnekle (max 500)
+            sample_size = min(500, len(X_test))
+            idx_sample  = np.random.choice(len(X_test), sample_size, replace=False)
+            X_sample    = X_test[idx_sample]
+
+            # Ağaç tabanlı modeller için TreeExplainer, doğrusal için LinearExplainer
             if "Gradient" in best_m or "Forest" in best_m:
-                import joblib
-                from config import DATA_DIR
-                model_path = os.path.join(
-                    DATA_DIR, "processed", "models",
-                    f"capacity_{col}_{horizon}h_{best_m.lower().replace(' ', '_')}.pkl",
-                )
-                pkg   = joblib.load(model_path)
-                model = pkg["model"]
-
                 explainer   = shap.TreeExplainer(model)
-                # Büyük test setlerinde örnekle (max 500)
-                sample_size = min(500, len(X_test))
-                idx_sample  = np.random.choice(len(X_test), sample_size, replace=False)
-                X_sample    = X_test[idx_sample]
                 shap_values = explainer.shap_values(X_sample)
+            elif "Linear" in best_m:
+                ds_train    = datasets[(col, horizon)]
+                X_train     = ds_train["X_train"]
+                bg_size     = min(200, len(X_train))
+                bg_idx      = np.random.choice(len(X_train), bg_size, replace=False)
+                background  = shap.maskers.Independent(X_train[bg_idx], max_samples=bg_size)
+                explainer   = shap.LinearExplainer(model, background)
+                shap_values = explainer.shap_values(X_sample)
+            else:
+                continue
 
-                mean_abs_shap = np.abs(shap_values).mean(axis=0)
-                imp_df = pd.DataFrame({
-                    "feature":    fnames,
-                    "importance": mean_abs_shap,
-                }).sort_values("importance", ascending=False).reset_index(drop=True)
+            mean_abs_shap = np.abs(shap_values).mean(axis=0)
+            imp_df = pd.DataFrame({
+                "feature":    fnames,
+                "importance": mean_abs_shap,
+            }).sort_values("importance", ascending=False).reset_index(drop=True)
 
-                imp_df.to_csv(
-                    os.path.join(RESULTS_DIR, "reports",
-                                 f"shap_capacity_{col}_{horizon}h.csv"),
-                    index=False,
-                )
+            imp_df.to_csv(
+                os.path.join(RESULTS_DIR, "reports",
+                             f"shap_capacity_{col}_{horizon}h.csv"),
+                index=False,
+            )
 
-                _plot_shap_bar(imp_df, f"Kapasite Tahmini SHAP — {col} ({horizon}s)",
-                               f"shap_capacity_bar_{col}_{horizon}h.png")
-                _plot_shap_beeswarm(shap_values, fnames,
-                                    f"Kapasite Tahmini SHAP Özet — {col} ({horizon}s)",
-                                    f"shap_capacity_beeswarm_{col}_{horizon}h.png",
-                                    X_sample)
-                _plot_shap_dependence(shap_values, fnames, imp_df,
-                                      f"shap_capacity_dep_{col}_{horizon}h.png",
-                                      X_sample)
+            _plot_shap_bar(imp_df, f"Kapasite Tahmini SHAP — {col} ({horizon}s)",
+                           f"shap_capacity_bar_{col}_{horizon}h.png")
+            _plot_shap_beeswarm(shap_values, fnames,
+                                f"Kapasite Tahmini SHAP Özet — {col} ({horizon}s)",
+                                f"shap_capacity_beeswarm_{col}_{horizon}h.png",
+                                X_sample)
+            _plot_shap_dependence(shap_values, fnames, imp_df,
+                                  f"shap_capacity_dep_{col}_{horizon}h.png",
+                                  X_sample)
 
-                summary[key] = {
-                    "best_model":    best_m,
-                    "top_features":  imp_df.head(10)[["feature", "importance"]].to_dict("records"),
-                }
-                print(f"    SHAP → {key} ({best_m})  top özellik: {imp_df.iloc[0]['feature']}")
+            summary[key] = {
+                "best_model":    best_m,
+                "top_features":  imp_df.head(10)[["feature", "importance"]].to_dict("records"),
+            }
+            print(f"    SHAP → {key} ({best_m})  top özellik: {imp_df.iloc[0]['feature']}")
 
     return summary
 
@@ -120,52 +131,63 @@ def explain_health(health_results: dict, dataset: dict) -> dict:
     fnames  = dataset["feature_names"]
     X_test  = dataset["X_test"]
 
+    import joblib
+    from config import DATA_DIR
+    model_path = os.path.join(
+        DATA_DIR, "processed", "models",
+        f"health_{best_m.lower().replace(' ', '_')}.pkl",
+    )
+    pkg   = joblib.load(model_path)
+    model = pkg["model"]
+
+    sample_size = min(500, len(X_test))
+    idx_sample  = np.random.choice(len(X_test), sample_size, replace=False)
+    X_sample    = X_test[idx_sample]
+
     if "Gradient" in best_m or "Forest" in best_m:
-        import joblib
-        from config import DATA_DIR
-        model_path = os.path.join(
-            DATA_DIR, "processed", "models",
-            f"health_{best_m.lower().replace(' ', '_')}.pkl",
-        )
-        pkg   = joblib.load(model_path)
-        model = pkg["model"]
-
         explainer   = shap.TreeExplainer(model)
-        sample_size = min(500, len(X_test))
-        idx_sample  = np.random.choice(len(X_test), sample_size, replace=False)
-        X_sample    = X_test[idx_sample]
         shap_values = explainer.shap_values(X_sample)
-
         # İkili sınıflandırma: class 1 SHAP değerleri
         sv = shap_values[:, :, 1] if shap_values.ndim == 3 else shap_values
+    elif "Logistic" in best_m or "Linear" in best_m:
+        X_train    = dataset["X_train"]
+        bg_size    = min(200, len(X_train))
+        bg_idx     = np.random.choice(len(X_train), bg_size, replace=False)
+        background = shap.maskers.Independent(X_train[bg_idx], max_samples=bg_size)
+        # LogisticRegression uses the scaled version — pkg["scaler"] was applied at train time
+        scaler     = pkg.get("scaler")
+        X_samp_s   = scaler.transform(X_sample) if scaler is not None else X_sample
+        explainer   = shap.LinearExplainer(model, background)
+        shap_values = explainer.shap_values(X_samp_s)
+        sv          = shap_values
+    else:
+        return {}
 
-        mean_abs_shap = np.abs(sv).mean(axis=0)
-        imp_df = pd.DataFrame({
-            "feature":    fnames,
-            "importance": mean_abs_shap,
-        }).sort_values("importance", ascending=False).reset_index(drop=True)
+    mean_abs_shap = np.abs(sv).mean(axis=0)
+    imp_df = pd.DataFrame({
+        "feature":    fnames,
+        "importance": mean_abs_shap,
+    }).sort_values("importance", ascending=False).reset_index(drop=True)
 
-        imp_df.to_csv(
-            os.path.join(RESULTS_DIR, "reports", "shap_health.csv"),
-            index=False,
-        )
+    imp_df.to_csv(
+        os.path.join(RESULTS_DIR, "reports", "shap_health.csv"),
+        index=False,
+    )
 
-        _plot_shap_bar(imp_df, f"Sağlık Riski SHAP — {best_m}",
-                       "shap_health_bar.png")
-        _plot_shap_beeswarm(sv, fnames,
-                            f"Sağlık Riski SHAP Özet — {best_m}",
-                            "shap_health_beeswarm.png", X_sample)
-        _plot_shap_dependence(sv, fnames, imp_df,
-                              "shap_health_dep.png", X_sample)
+    _plot_shap_bar(imp_df, f"Sağlık Riski SHAP — {best_m}",
+                   "shap_health_bar.png")
+    _plot_shap_beeswarm(sv, fnames,
+                        f"Sağlık Riski SHAP Özet — {best_m}",
+                        "shap_health_beeswarm.png", X_sample)
+    _plot_shap_dependence(sv, fnames, imp_df,
+                          "shap_health_dep.png", X_sample)
 
-        print(f"    SHAP → Sağlık ({best_m})  top özellik: {imp_df.iloc[0]['feature']}")
+    print(f"    SHAP → Sağlık ({best_m})  top özellik: {imp_df.iloc[0]['feature']}")
 
-        return {
-            "best_model":   best_m,
-            "top_features": imp_df.head(10)[["feature", "importance"]].to_dict("records"),
-        }
-
-    return {}
+    return {
+        "best_model":   best_m,
+        "top_features": imp_df.head(10)[["feature", "importance"]].to_dict("records"),
+    }
 
 
 # ── Yardımcı görselleştirme fonksiyonları ────────────────────────────────────

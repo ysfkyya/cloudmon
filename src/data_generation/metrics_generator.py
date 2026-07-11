@@ -196,8 +196,16 @@ def generate_metrics() -> pd.DataFrame:
                + staj_vm * 8.0
                + np.random.normal(0, 300, n))
 
-    # ── API Gecikmesi (ms) — CPU ile korele ───────────────────────────────────
-    latency = 55.0 + 0.65 * cpu + np.random.normal(0, 18, n)
+    # ── API Gecikmesi (ms) — CPU, bellek baskısı ve bağımsız ağ bileşeni ────
+    # Bellek baskısı: yüksek bellek → DB yavaşlaması (swap, önbellek kaçırması)
+    db_pressure = np.clip((mem - 72.0) / 28.0, 0, 1) + np.abs(np.random.normal(0, 0.12, n))
+    # Ağ titremesi: iş yüküne bağlı ama CPU'dan bağımsız rassal bileşen
+    net_jitter  = 38.0 * load * np.abs(np.random.normal(0, 1, n))
+    latency = (55.0
+               + 0.42 * cpu           # CPU kuyruklama gecikmesi
+               + 165.0 * db_pressure  # Bellek/DB baskısı
+               + net_jitter           # Ağ değişkenliği
+               + np.random.normal(0, 18, n))
 
     # ── Hata Oranı (%) ────────────────────────────────────────────────────────
     err_rate = (0.12

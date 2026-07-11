@@ -31,22 +31,31 @@ _ROLL_WINDOWS = [3, 6, 12, 24, 168]
 _LAG_HOURS    = [1, 6, 24, 48, 168]
 _DELTA_HOURS  = [1, 6, 24]
 
-# Temel metrik sütunları
+# Temel metrik sütunları — network ve vm_count dahil edildi
 _METRIC_COLS = [
     "cpu_usage_percent",
     "memory_usage_percent",
     "disk_usage_percent",
     "api_latency_ms",
     "error_rate_percent",
+    "network_in_mbps",
+    "network_out_mbps",
+    "api_requests_per_hour",
+    "vm_count",
 ]
 
-# Log sayım sütunları
+# Log sayım sütunları — tüm hata tipleri dahil edildi
 _LOG_COUNT_COLS = [
     "total_errors",
     "critical_count",
     "timeout_count",
     "db_connection_count",
     "resource_exhausted_count",
+    "quota_exceeded_count",
+    "auth_failure_count",
+    "network_error_count",
+    "scheduler_error_count",
+    "io_error_count",
 ]
 
 
@@ -89,9 +98,14 @@ def build_feature_matrix(metrics_df: pd.DataFrame, log_df: pd.DataFrame) -> pd.D
             df[f"{col}_lag_{lag}h"] = df[col].shift(lag)
 
     # ── Değişim hızı (delta) ─────────────────────────────────────────────────
-    for col in ["cpu_usage_percent", "memory_usage_percent", "disk_usage_percent"]:
-        for d in _DELTA_HOURS:
-            df[f"{col}_delta_{d}h"] = df[col].diff(d)
+    _DELTA_COLS = [
+        "cpu_usage_percent", "memory_usage_percent", "disk_usage_percent",
+        "api_latency_ms", "error_rate_percent", "vm_count",
+    ]
+    for col in _DELTA_COLS:
+        if col in df.columns:
+            for d in _DELTA_HOURS:
+                df[f"{col}_delta_{d}h"] = df[col].diff(d)
 
     # ── Log hareketli toplamları ─────────────────────────────────────────────
     for col in _LOG_COUNT_COLS:

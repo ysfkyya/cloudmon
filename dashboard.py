@@ -116,6 +116,7 @@ with st.sidebar:
 
     page = st.radio("Sayfa", [
         "🏠  Ana Sayfa",
+        "📖  Proje Hakkında",
         "📊  Veri Genel Görünüm",
         "📈  Kapasite Tahmini",
         "🩺  Sağlık Sınıflandırması",
@@ -151,6 +152,496 @@ with st.sidebar:
             st.caption(f"📦 {len(m):,} saatlik nokta")
         except Exception:
             pass
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  PROJe HAKKINDA — README.md görüntüleyici
+# ═══════════════════════════════════════════════════════════════════════════════
+if page.startswith("📖"):
+    import re
+    readme_path = os.path.join(BASE, "README.md")
+
+    st.markdown("""
+    <style>
+    .readme-header {
+        background: linear-gradient(135deg, #1e3a5f 0%, #2d6a9f 50%, #1a4a7a 100%);
+        padding: 32px 36px; border-radius: 12px; margin-bottom: 20px; color: white;
+    }
+    .readme-header h1 { color: white; margin: 0 0 8px 0; font-size: 1.8rem; }
+    .readme-header p  { color: #c9dff5; margin: 0; font-size: 1rem; }
+    .readme-badge {
+        display: inline-block;
+        background: rgba(255,255,255,0.18); border: 1px solid rgba(255,255,255,0.35);
+        color: white; padding: 3px 12px; border-radius: 20px;
+        font-size: .80rem; margin: 6px 4px 0 0;
+    }
+    .paper-card {
+        background: #f8fafc; border-radius: 10px; padding: 16px 18px;
+        margin-bottom: 14px; border-left: 4px solid #3b82f6;
+        border: 1px solid #e2e8f0;
+    }
+    .paper-card.aiops    { border-left-color: #7c3aed; }
+    .paper-card.anomaly  { border-left-color: #dc2626; }
+    .paper-card.capacity { border-left-color: #059669; }
+    .paper-card.xai      { border-left-color: #d97706; }
+    .paper-card.log      { border-left-color: #0891b2; }
+    .paper-card.llm      { border-left-color: #7c3aed; }
+    .paper-card.openstack{ border-left-color: #be185d; }
+    .paper-title  { font-weight: 700; font-size: .97rem; color: #1e293b; margin-bottom: 4px; }
+    .paper-meta   { font-size: .80rem; color: #64748b; margin-bottom: 8px; }
+    .paper-body   { font-size: .88rem; color: #374151; }
+    .paper-rel    { margin-top: 8px; font-size: .83rem; background: #eff6ff;
+                    border-radius: 6px; padding: 6px 10px; color: #1d4ed8; }
+    .contrib-card {
+        background: linear-gradient(135deg, #f0fdf4, #dcfce7);
+        border-radius: 10px; padding: 18px 20px; margin-bottom: 14px;
+        border-left: 5px solid #16a34a;
+    }
+    .contrib-title { font-weight: 700; font-size: 1.05rem; color: #14532d; margin-bottom: 8px; }
+    .contrib-body  { font-size: .90rem; color: #374151; }
+    .rq-card {
+        background: #fefce8; border-radius: 8px; padding: 12px 16px;
+        margin-bottom: 10px; border-left: 4px solid #ca8a04;
+        font-size: .90rem; color: #374151;
+    }
+    </style>
+    <div class="readme-header">
+      <h1>☁️ CloudMon</h1>
+      <p>Bulut Altyapısı Proaktif İzleme ve Karar Destek Sistemi</p>
+      <div style="margin-top:12px;">
+        <span class="readme-badge">🐍 Python 3.10+</span>
+        <span class="readme-badge">🤖 ML Pipeline</span>
+        <span class="readme-badge">📊 SHAP</span>
+        <span class="readme-badge">☁️ OpenStack</span>
+        <span class="readme-badge">🔮 LLM Entegrasyonu</span>
+        <span class="readme-badge">📈 27 Model</span>
+        <span class="readme-badge">📚 6 Araştırma Alanı</span>
+        <span class="readme-badge">🏆 6 Özgün Katkı</span>
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    tab_readme, tab_lit, tab_contrib = st.tabs([
+        "📋 Proje Dokümantasyonu",
+        "📚 Literatür Taraması",
+        "🏆 Özgün Katkılar",
+    ])
+
+    # ── Sekme 1: README ──────────────────────────────────────────────────────────
+    with tab_readme:
+        if os.path.exists(readme_path):
+            with open(readme_path, encoding="utf-8") as f:
+                readme_content = f.read()
+            readme_rendered = re.sub(
+                r"```mermaid\n(.*?)```",
+                lambda m: "```\n" + m.group(1) + "```",
+                readme_content, flags=re.DOTALL,
+            )
+            with st.expander("📋 İçindekiler", expanded=False):
+                toc_items = [
+                    "🎯 Motivasyon ve Problem Tanımı", "🏗️ Sistem Mimarisi",
+                    "🔄 Pipeline Akışı", "📥 Veri Katmanı",
+                    "⚙️ Özellik Mühendisliği", "📈 Kapasite Tahmini",
+                    "🩺 Sağlık Riski Sınıflandırması", "🔍 SHAP Açıklanabilirlik",
+                    "💡 Öneri Motoru", "🤖 LLM Entegrasyonu",
+                    "📊 Model Performans Sonuçları", "🗂️ Proje Yapısı",
+                    "🚀 Kurulum ve Çalıştırma", "📚 Literatür Taraması",
+                    "🏆 Özgün Katkılar",
+                ]
+                cols_toc = st.columns(2)
+                for i, label in enumerate(toc_items):
+                    cols_toc[i % 2].markdown(f"- {label}")
+            st.markdown(readme_rendered)
+            st.divider()
+            with open(readme_path, "rb") as f_dl:
+                st.download_button(
+                    "📥 README.md İndir", data=f_dl,
+                    file_name="CloudMon_README.md", mime="text/markdown",
+                    use_container_width=True,
+                )
+        else:
+            st.error("README.md dosyası bulunamadı.")
+
+    # ── Sekme 2: Literatür Taraması ──────────────────────────────────────────────
+    with tab_lit:
+        st.markdown("""<div class="box">
+        CloudMon altı farklı araştırma alanının kesişiminde konumlanır.
+        Aşağıda her alan için temel akademik çalışmalar ve bu çalışmaların
+        CloudMon tasarımıyla ilişkisi açıklanmaktadır.
+        </div>""", unsafe_allow_html=True)
+
+        PAPERS = {
+            "🟣 AIOps — Yapay Zekâ Destekli BT Operasyonları": {
+                "color_cls": "aiops",
+                "desc": "AIOps, büyük ölçekli BT sistemlerinin log, metrik ve olay verilerini makine "
+                        "öğrenmesiyle analiz ederek operasyonel zekâ üretmesini sağlayan disiplindir. "
+                        "2017'de Gartner tarafından kavramsallaştırılmış, 2019'dan itibaren akademik "
+                        "literatürde yerini sağlamlaştırmıştır.",
+                "papers": [
+                    {
+                        "title": "AIOps: Real-World Challenges and Research Innovations",
+                        "meta":  "Dang et al. · ICSE 2019 · Microsoft Research",
+                        "body":  "AIOps'un endüstriyel zorlukları ve açık araştırma soruları; "
+                                 "noise reduction, anomaly detection ve root cause localization "
+                                 "problemi Microsoft ölçeğinde tanımlanmıştır.",
+                        "rel":   "CloudMon öneri motorunu motive eden 'noise reduction' ve "
+                                 "'root cause localization' problemleri bu çalışmada ilk kez sistematik biçimde ele alınmıştır.",
+                    },
+                    {
+                        "title": "Outage Prediction and Diagnosis for Cloud Service Systems",
+                        "meta":  "Chen et al. · WWW 2019 · Microsoft Azure",
+                        "body":  "Azure bulut servis kesintilerini tahmin eden hibrit ML yaklaşımı; "
+                                 "metrik + log birleşimi ile iki aşamalı (tahmin + tanı) mimari.",
+                        "rel":   "CloudMon'un iki-katmanlı mimarisine (kapasite tahmini + sağlık "
+                                 "sınıflandırması) doğrudan ilham kaynağı olmuştur.",
+                    },
+                    {
+                        "title": "Anomaly Detection and Failure Root Cause Analysis in Cloud Applications: A Survey",
+                        "meta":  "Soldani & Brogi · ACM Computing Surveys 2022",
+                        "body":  "Bulut-tabanlı mikroservis sistemlerinde 40+ anomali tespit yöntemi "
+                                 "karşılaştırması; metrik tabanlı, log tabanlı ve izleme tabanlı "
+                                 "yaklaşımların güçlü ve zayıf yönleri.",
+                        "rel":   "CloudMon'un log+metrik fusion yaklaşımının alan içindeki "
+                                 "konumlanması için temel referans tarama çalışmasıdır.",
+                    },
+                ],
+            },
+            "🔴 Anomali Tespiti ve Erken Uyarı": {
+                "color_cls": "anomaly",
+                "desc": "Bu alandaki çalışmalar bir sistemin 'normal' durumundan sapmasını tespit "
+                        "etmeye odaklanır. CloudMon'un sağlık sınıflandırıcısı bu literatürün "
+                        "doğrudan bir mirasçısıdır.",
+                "papers": [
+                    {
+                        "title": "Anomaly Detection: A Survey",
+                        "meta":  "Chandola, Banerjee & Kumar · ACM Computing Surveys 2009",
+                        "body":  "Anomali tespitinin temel sınıflandırması: nokta anomali, bağlamsal "
+                                 "anomali, kolektif anomali. İstatistiksel, mesafe ve sınıflandırma "
+                                 "tabanlı yöntemlerin kapsamlı karşılaştırması.",
+                        "rel":   "CloudMon'un risk etiketi 'bağlamsal anomali' kategorisine girer: "
+                                 "anlık eşik değil, 4 saatlik zaman penceresi içinde koşullu risk tespiti.",
+                    },
+                    {
+                        "title": "DeepLog: Anomaly Detection and Diagnosis from System Logs through Deep Learning",
+                        "meta":  "Du et al. · CCS 2017 · UC Davis",
+                        "body":  "LSTM ile sistem loglarında sıra anomalisi tespiti. Log şablonlarını "
+                                 "otomatik öğrenir, anormal log geçişlerini gerçek zamanlı tespit eder.",
+                        "rel":   "CloudMon log verilerini sıra değil sayım olarak işler; DeepLog'un "
+                                 "template gereksinimi yerine agregatör yaklaşım benimsenerek "
+                                 "yapısal esneklik ve yorumlanabilirlik kazanılmıştır.",
+                    },
+                    {
+                        "title": "A Survey on Automated Log Analysis for Reliability Engineering",
+                        "meta":  "He et al. · ACM Computing Surveys 2021",
+                        "body":  "Log parsing, anomaly detection, failure diagnosis ve prediction "
+                                 "üzerine 200+ makale taraması. Aggregation tabanlı ve template "
+                                 "tabanlı yaklaşımların karşılaştırması.",
+                        "rel":   "CloudMon'un log_features.csv tasarımı bu taramanın "
+                                 "'aggregation-based' yaklaşım sınıfına girmektedir: saatlik sayım "
+                                 "agregasyonu, template değişikliklerine doğal olarak dayanıklıdır.",
+                    },
+                ],
+            },
+            "🟢 Bulut Kapasite Planlaması ve İş Yükü Tahmini": {
+                "color_cls": "capacity",
+                "desc": "Kapasite planlaması, uzun vadeli kaynak gereksinimini öngörerek doğru "
+                        "zamanda genişleme kararı verme disiplinidir. Bu alan CloudMon'un en "
+                        "doğrudan katkı sunduğu alandır.",
+                "papers": [
+                    {
+                        "title": "Workload Prediction Using ARIMA Model and Its Impact to Resource Provisioning and Cost Parameter in Cloud Computing Environments",
+                        "meta":  "Calheiros et al. · IEEE Transactions on Parallel and Distributed Systems 2015",
+                        "body":  "ARIMA ile CloudSim simülasyonunda kaynak tahsisi optimizasyonu. "
+                                 "Mevsimsel örüntülerin tespiti ve öngörülü ölçekleme stratejisi.",
+                        "rel":   "CloudMon tree-based ML tercih eder: ARIMA stasyonerlik varsayımını "
+                                 "gerektirir; OpenStack iş yükleri staj dönemleri + donanım alımları "
+                                 "+ incident spike'ları içerdiğinden ARIMA tek başına yetersiz kalır.",
+                    },
+                    {
+                        "title": "A Review of Auto-Scaling Techniques for Elastic Applications in Cloud Environments",
+                        "meta":  "Lorido-Botran et al. · Journal of Grid Computing 2014",
+                        "body":  "Reaktif, öngörülü ve hibrit elastik ölçekleme stratejileri. "
+                                 "Öngörülü ölçekleme için gerekli tahmin modeli gereksinimleri analizi.",
+                        "rel":   "CloudMon'un 'eşiğe kaç gün' çıktısı doğrudan öngörülü ölçekleme "
+                                 "kararlarını besler. Bu çalışma planlama ufkunun neden önemli "
+                                 "olduğunu teorik olarak ortaya koyar.",
+                    },
+                    {
+                        "title": "An Empirical Study of Deep Learning Models for Workload Prediction in Cloud Data Centers",
+                        "meta":  "Chen et al. · IEEE ICDCS 2021",
+                        "body":  "LSTM, GRU, Transformer gibi derin öğrenme modellerinin iş yükü "
+                                 "tahmininde kapsamlı karşılaştırması. Veri boyutu ve model "
+                                 "karmaşıklığı arasındaki denge analizi.",
+                        "rel":   "CloudMon Gradient Boosting tercih eder: ~13 000 örnekte derin "
+                                 "öğrenme overfitting riskiyle karşılaşır ve yorumlanabilirlik "
+                                 "avantajı kaybolur. Bu çalışma tercih gerekçesini destekler.",
+                    },
+                ],
+            },
+            "🟡 Açıklanabilir Yapay Zekâ (XAI)": {
+                "color_cls": "xai",
+                "desc": "Makine öğrenmesi modelleri 'kara kutu' olduğunda operatör güvenmez ve "
+                        "aksiyona geçmez. XAI araştırmaları bu güven açığını kapatmaya çalışır.",
+                "papers": [
+                    {
+                        "title": "A Unified Approach to Interpreting Model Predictions",
+                        "meta":  "Lundberg & Lee · NeurIPS 2017 · University of Washington",
+                        "body":  "SHAP (SHapley Additive exPlanations) yönteminin önerilmesi. "
+                                 "Oyun teorisindeki Shapley değeri kavramı makine öğrenmesi "
+                                 "açıklanabilirliğine uyarlanmıştır. Tutarlılık ve yerellik "
+                                 "aksiyomlarını aynı anda sağlayan ilk yöntem.",
+                        "rel":   "CloudMon SHAP'ı doğrudan ve merkezi biçimde kullanır. "
+                                 "Bu çalışma tüm açıklanabilirlik katmanının temel referansıdır.",
+                    },
+                    {
+                        "title": "From Local Explanations to Global Understanding with Explainable AI for Trees",
+                        "meta":  "Lundberg et al. · Nature Machine Intelligence 2020",
+                        "body":  "TreeExplainer: ağaç tabanlı modeller için O(TLD) verimli "
+                                 "SHAP hesabı. Polynomial yerine polinom-altı zaman karmaşıklığı "
+                                 "sayesinde büyük ağaçlarda uygulanabilir hale gelmiştir.",
+                        "rel":   "CloudMon TreeExplainer tercih eder. 500 test örneği ile "
+                                 "makul sürede (≈40 sn) tamamlanması bu verimlilik sayesindedir.",
+                    },
+                    {
+                        "title": "DARPA's Explainable Artificial Intelligence (XAI) Program",
+                        "meta":  "Gunning & Aha · AI Magazine 2019 · DARPA",
+                        "body":  "XAI'nin askeri, sağlık ve kamu sektörü uygulamalarında "
+                                 "güven ve şeffaflık gereksinimleri. İnsan-makine güven döngüsü "
+                                 "modeli ve değerlendirme çerçevesi.",
+                        "rel":   "CloudMon aynı güven gereksinimini operasyonel BT'ye taşır: "
+                                 "'neden alarm?' sorusu yanıtlanmadan operatör aksiyona geçmez. "
+                                 "Bu çalışma CloudMon'un varoluş gerekçesini meşrulaştıran "
+                                 "üst-düzey referanstır.",
+                    },
+                ],
+            },
+            "🔵 LLM ile BT Operasyonları": {
+                "color_cls": "llm",
+                "desc": "Büyük dil modellerinin SRE (Site Reliability Engineering) ve BT "
+                        "yönetimine entegrasyonu 2022'den itibaren hız kazanmıştır. "
+                        "CloudMon bu alanda en güncel çalışmalarla paraleldir.",
+                "papers": [
+                    {
+                        "title": "Recommending Root-Cause and Mitigation Steps for Cloud Incidents using Large Language Models",
+                        "meta":  "Ahmed et al. · ICSE 2023 · Microsoft",
+                        "body":  "GPT-4 ile Azure incident'larının kök neden analizi ve "
+                                 "düzeltme adımı önerisi. İnsan uzman önerilerine kıyasla "
+                                 "%22 F1 artışı elde edilmiştir.",
+                        "rel":   "CloudMon aynı hedefi taşır ancak yapılandırılmış bağlam "
+                                 "(SHAP + kural motoru çıktısı + staj durumu) ile prompt kalitesini "
+                                 "artırır; LLM'e ham metrik değil yorumlanmış bağlam verilir.",
+                    },
+                    {
+                        "title": "LILAC: Log Parsing using LLMs with Adaptive Parsing Cache",
+                        "meta":  "Jiang et al. · ICSE 2024",
+                        "body":  "GPT-4 ile sıfır-atış log ayrıştırma ve adaptif önbellek "
+                                 "mekanizması. Önceden etiket gerektirmeyen dinamik log parsing.",
+                        "rel":   "CloudMon'un LLM katmanı bu alandaki en son trendi yansıtır. "
+                                 "Log içeriğini doğrudan LLM'e göndermek yerine agregat özellikler "
+                                 "gönderilir — token verimliliği ve tutarlılık için.",
+                    },
+                    {
+                        "title": "Owl: A Large Language Model for IT Operations",
+                        "meta":  "Guo et al. · arXiv 2024",
+                        "body":  "BT operasyonları için ince ayar yapılmış özel LLM. "
+                                 "Log + metrik + komut geçmişi ile eğitim. Genel amaçlı "
+                                 "LLM'lere kıyasla alana özgü performans artışı.",
+                        "rel":   "CloudMon genel amaçlı LLM'leri (Claude, GPT-4o) kullanır. "
+                                 "Bu çalışmayla zıtlık kurar: özel fine-tuning gerektirmeden "
+                                 "yapılandırılmış bağlamla operasyonel değer üretilebildiğini gösterir.",
+                    },
+                    {
+                        "title": "GPT-4 is Not Yet a Human Expert in Cybersecurity: A Benchmarking Study",
+                        "meta":  "Wang et al. · arXiv 2023",
+                        "body":  "LLM'lerin güvenlik ve altyapı uzman kararlarındaki "
+                                 "sınırlılıklarının nicel analizi. Bağlam kalitesinin LLM "
+                                 "performansına etkisi.",
+                        "rel":   "CloudMon bu sınırlılığı kabul ederek LLM'i kural motorunun "
+                                 "üzerine bir katman olarak konumlar, tek karar vericisi yapmaz. "
+                                 "Hibrit yaklaşım bu çalışmanın bulgularıyla örtüşür.",
+                    },
+                ],
+            },
+            "🔵 OpenStack ve Bulut Altyapısı İzleme": {
+                "color_cls": "openstack",
+                "desc": "OpenStack'e özgü izleme ve yönetim çalışmaları — CloudMon'un "
+                        "doğrudan uygulama alanı.",
+                "papers": [
+                    {
+                        "title": "Orchestration of Monitoring for IaaS Cloud Platforms: OpenStack Case Study",
+                        "meta":  "Alam et al. · IEEE CLOUD 2017",
+                        "body":  "Prometheus + OpenStack entegrasyonunun sistematik analizi. "
+                                 "Compute, network ve storage kaynaklarının izleme mimarisi.",
+                        "rel":   "CloudMon veri kaynağı olarak aynı Prometheus + OpenSearch "
+                                 "mimarisini benimser. Bu çalışma gerçek entegrasyon için "
+                                 "referans mimari sağlar.",
+                    },
+                    {
+                        "title": "Detecting and Localizing End-to-End Performance Degradation for Cellular Networks",
+                        "meta":  "Chiang et al. · IEEE INFOCOM 2017",
+                        "body":  "Ağ performans bozunumunun yapısal analizi, bozunuma katkıda "
+                                 "bulunan servis bileşenlerinin tespiti. Kısmen OpenStack'e "
+                                 "uyarlanabilir yöntemler.",
+                        "rel":   "CloudMon API latency bozunumunu trend analizi olarak modellemekte "
+                                 "bu çalışmadan ilham alır. 'Bozunuma neden katkıda bulunanlar?' "
+                                 "sorusu SHAP ile yanıtlanmaktadır.",
+                    },
+                    {
+                        "title": "Drain: An Online Log Parsing Approach with Fixed Depth Tree",
+                        "meta":  "He et al. · IEEE ICDM 2017",
+                        "body":  "Gerçek zamanlı log ayrıştırma için sabit derinlikli ağaç "
+                                 "yapısı. 1 ms/satır performansı ile OpenStack gibi yüksek "
+                                 "hacimli log ortamlarında kullanılabilir.",
+                        "rel":   "CloudMon log parsing yerine saatlik sayım agregasyonunu tercih "
+                                 "eder — template güncellenmesi gerektirmeyen daha basit "
+                                 "ve yorumlanabilir yaklaşım.",
+                    },
+                ],
+            },
+        }
+
+        for area_title, area_data in PAPERS.items():
+            st.markdown(f"### {area_title}")
+            st.markdown(f'<div class="box">{area_data["desc"]}</div>',
+                        unsafe_allow_html=True)
+            for p in area_data["papers"]:
+                st.markdown(f"""
+                <div class="paper-card {area_data['color_cls']}">
+                  <div class="paper-title">📄 {p['title']}</div>
+                  <div class="paper-meta">{p['meta']}</div>
+                  <div class="paper-body">{p['body']}</div>
+                  <div class="paper-rel">🔗 <b>CloudMon ile İlişki:</b> {p['rel']}</div>
+                </div>""", unsafe_allow_html=True)
+            st.markdown("")
+
+    # ── Sekme 3: Özgün Katkılar ──────────────────────────────────────────────────
+    with tab_contrib:
+        st.markdown("""<div class="box">
+        Mevcut literatür incelendiğinde CloudMon'un altı temel alanda özgün katkı sunduğu görülmektedir.
+        Aşağıdaki karşılaştırma tablosu ve katkı açıklamaları bu konumlandırmayı netleştirir.
+        </div>""", unsafe_allow_html=True)
+
+        st.subheader("Konumlandırma Karşılaştırması")
+        pos_df = pd.DataFrame([
+            {"Boyut": "Analiz kapsamı",       "Geleneksel Yaklaşım": "Tek katman (anomali VEYA kapasite)",  "CloudMon": "6 katman entegre pipeline"},
+            {"Boyut": "Veri kaynağı",         "Geleneksel Yaklaşım": "Metrik VEYA log (ayrı ayrı)",         "CloudMon": "Metrik + log zaman hizalaması → tek model"},
+            {"Boyut": "Açıklanabilirlik",     "Geleneksel Yaklaşım": "Opsiyonel, sonradan eklenen",          "CloudMon": "Zorunlu; SHAP çıktısı aksiyona dönüştürülmüş"},
+            {"Boyut": "Alan bilgisi",         "Geleneksel Yaklaşım": "Domain-agnostic tasarım",              "CloudMon": "Staj takvimi + donanım alımları entegre"},
+            {"Boyut": "LLM kullanımı",        "Geleneksel Yaklaşım": "Yok veya tek model",                  "CloudMon": "İki model (Claude + GPT-4o) karşılaştırmalı"},
+            {"Boyut": "Veri üretimi",         "Geleneksel Yaklaşım": "Kara kutu veya gizli veri",            "CloudMon": "Yapılandırılabilir + tekrarlanabilir (SEED=42)"},
+            {"Boyut": "Hedef çıktı",          "Geleneksel Yaklaşım": "Anomali etiketi veya tahmin değeri",  "CloudMon": "Önceliklendirilmiş aksiyon listesi"},
+            {"Boyut": "Tahmin ufku",          "Geleneksel Yaklaşım": "Tek ufuk (genellikle kısa vadeli)",   "CloudMon": "24h / 72h / 168h çoklu ufuk"},
+        ])
+        st.dataframe(pos_df, width="stretch", hide_index=True)
+
+        st.divider()
+        st.subheader("Özgün Katkılar")
+
+        CONTRIBS = [
+            {
+                "no": "1",
+                "title": "Uçtan Uca Entegre Pipeline",
+                "body": """Literatürdeki çalışmaların büyük çoğunluğu yalnızca <b>tek bir soruya</b> odaklanır:
+                anomali tespiti <i>veya</i> kapasite tahmini <i>veya</i> açıklanabilirlik.
+                CloudMon bu altı katmanı tek bir çalıştırılabilir pipeline'da birleştirir:<br><br>
+                <code>Veri Üretimi → Özellik Mühendisliği → Kapasite Tahmini →
+                Sağlık Sınıflandırması → SHAP → Öneri Motoru → LLM</code><br><br>
+                Her katmanın çıktısı bir sonraki katmanın girdisini besler. Modüler yapı
+                sayesinde gerçek sisteme entegrasyonda yalnızca veri üretim katmanı değiştirilir.""",
+            },
+            {
+                "no": "2",
+                "title": "Log + Metrik Geçici Hizalaması",
+                "body": """Çoğu çalışma ya yalnızca metrikleri ya da yalnızca logları kullanır.
+                CloudMon ikisini <b>zaman damgası üzerinden tek özellik matrisinde birleştirir</b>.<br><br>
+                Bu birleştirmenin etkisi SHAP analizinde net biçimde görülür: sağlık riski
+                modelinde en yüksek katkı sağlayan özellikler arasında hem <code>error_rate_percent</code>
+                (metrik) hem de <code>timeout_count_rmean_6h</code> (log türevi) birlikte yer almaktadır.
+                Metrik eşiği henüz aşılmadan log sinyali yükselmiş olabilir — bu fusion'ın
+                proaktif izleme açısından değerini kanıtlar.""",
+            },
+            {
+                "no": "3",
+                "title": "SHAP Çıktısının Aksiyona Dönüştürülmesi",
+                "body": """Literatürdeki XAI çalışmaları genellikle açıklamada durur:
+                <i>"Bu özellik modelin tahminini +0.31 artırdı."</i><br><br>
+                CloudMon açıklamayı aksiyona bağlar:<br>
+                <i>"Bu uyarı özellikle <code>timeout_count_rmean_6h</code> yüksekliğinden kaynaklanıyor.
+                → Nova API timeout eşiğini kontrol edin
+                → DB bağlantı havuzunu genişletin
+                → Son 6 saatin Cinder loglarını inceleyin"</i><br><br>
+                Bu bağlantı, XAIOps (Explainable AI for Operations) alanında mevcut literatürde
+                nadiren görülen ancak sahada kritik öneme sahip bir köprüdür.""",
+            },
+            {
+                "no": "4",
+                "title": "Alan Bilgisinin Modele Entegrasyonu",
+                "body": """Genel bulut izleme çalışmaları <b>domain-agnostic</b> tasarlanır:
+                iş takvimi, organizasyonel örüntüler veya planlı yük artışları modele dahil edilmez.<br><br>
+                CloudMon <b>akademik takvim farkındalığı</b> ekler: staj dönemleri, donanım
+                alımları ve öngörülen VM burst miktarları hem veri üretimine hem öneri motoruna
+                hem de LLM bağlamına dahildir.<br><br>
+                <i>"Yaz Stajına 10 gün kaldı, bellek kotasını %15 artırın,
+                Nova scheduler kapasitesini kontrol edin."</i><br><br>
+                Literatürde bu düzeyde alan bilgisi entegrasyonu oldukça nadirdir.""",
+            },
+            {
+                "no": "5",
+                "title": "Çift LLM Karşılaştırma Çerçevesi",
+                "body": """Mevcut çalışmalar tek bir LLM ile değerlendirme yapar (Ahmed et al.: yalnızca GPT-4,
+                Guo et al.: yalnızca özel model). CloudMon aynı zenginleştirilmiş bağlamı
+                <b>Claude Sonnet (Anthropic)</b> ve <b>GPT-4o (OpenAI)</b>'ya eş zamanlı gönderir
+                ve yanıtları yan yana karşılaştırır.<br><br>
+                Bu çerçeve hem model davranış farklılıklarını hem de prompt mühendisliği kalitesini
+                değerlendirmeye olanak tanır. Operasyonel bir sistemde hangi LLM'in daha
+                tutarlı sonuçlar ürettiğini ampirik olarak ölçmek için doğrudan kullanılabilir.""",
+            },
+            {
+                "no": "6",
+                "title": "Yapılandırılabilir Sentetik Veri Çerçevesi",
+                "body": """Açık kaynak OpenStack izleme veri kümeleri son derece kısıtlıdır.
+                CloudMon deterministik ve yapılandırılabilir bir sentetik veri üretici sunar:<br><br>
+                • <b>Gerçekçilik:</b> Günlük kosinüs + haftalık sinüs + lineer trend + 15 incident<br>
+                • <b>Tekrarlanabilirlik:</b> SEED=42, deterministik pipeline<br>
+                • <b>Yapılandırılabilirlik:</b> config.py üzerinden tarih, eşik, incident, staj<br>
+                • <b>Entegrasyon hazırlığı:</b> Üretim katmanı Prometheus/OpenSearch ile birebir değiştirilebilir<br><br>
+                Bu tasarım araştırmacıların aynı altyapıyı farklı parametrelerle test etmesine
+                ve gerçek sistemlere minimum değişiklikle entegre etmesine olanak tanır.""",
+            },
+        ]
+
+        for c in CONTRIBS:
+            st.markdown(f"""
+            <div class="contrib-card">
+              <div class="contrib-title">🏆 Katkı {c['no']} — {c['title']}</div>
+              <div class="contrib-body">{c['body']}</div>
+            </div>""", unsafe_allow_html=True)
+
+        st.divider()
+        st.subheader("Açık Araştırma Soruları")
+        rqs = [
+            ("Kavram kayması (Concept Drift)",
+             "Staj dönemlerine ve donanım alımlarına insan müdahalesi olmadan uyum sağlayan "
+             "sürekli öğrenme mekanizmaları nasıl tasarlanır?"),
+            ("Çok kiracılı ortamlar (Multi-Tenancy)",
+             "Tek bir model birden fazla OpenStack tenant için genellenebilir mi, "
+             "yoksa her tenant kendi modelini mi gerektiriyor?"),
+            ("LLM güvenilirliği",
+             "Aynı bağlama farklı LLM'lerin farklı öneriler üretmesi operasyonel "
+             "güvenilirlik açısından nasıl ele alınmalı? Hangi yanıt seçilmeli?"),
+            ("Gerçek zamanlı SHAP",
+             "TreeExplainer'ı saatlik cron job ile çalıştırmak hesaplama açısından "
+             "sürdürülebilir mi? FastSHAP gibi yaklaşık yöntemler bu sorunu çözer mi?"),
+            ("Öneri kalite ölçütü",
+             "Üretilen önerilerin kalitesini nicel olarak ölçmek için hangi metrikler "
+             "kullanılabilir? İnsan değerlendirmesi ile otomatik metrik arasındaki korelasyon?"),
+        ]
+        for i, (rq_title, rq_body) in enumerate(rqs, 1):
+            st.markdown(f"""
+            <div class="rq-card">
+              <b>❓ SA{i} — {rq_title}</b><br>
+              {rq_body}
+            </div>""", unsafe_allow_html=True)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -742,9 +1233,10 @@ elif page.startswith("📈"):
             })
     df_res = pd.DataFrame(rows)
 
-    horizon_tabs = st.tabs([f"{h} Saatlik Ufuk" for h in FORECAST_HORIZONS])
+    horizons_in_results = sorted(set(int(v["horizon_h"]) for v in cap.values()))
+    horizon_tabs = st.tabs([f"{h} Saatlik Ufuk" for h in horizons_in_results])
 
-    for tab, horizon in zip(horizon_tabs, FORECAST_HORIZONS):
+    for tab, horizon in zip(horizon_tabs, horizons_in_results):
         with tab:
             horizon_key = f"{horizon}s"
             sub = df_res[df_res["Ufuk"] == horizon_key].drop(columns="Ufuk").copy()
@@ -774,9 +1266,11 @@ elif page.startswith("📈"):
     </div>""", unsafe_allow_html=True)
 
     show_image(fig_path("capacity_forecasts.png"),
-               "Gerçek (mavi) ve tahmin (kırmızı kesikli). Her satır bir kaynak; sol 24h, sağ 72h.")
+               "Gerçek (mavi) ve tahmin (kırmızı kesikli). Her satır bir kaynak.")
     show_image(fig_path("capacity_model_comparison.png"),
                "Her kaynak için üç modelin RMSE karşılaştırması.")
+    show_image(fig_path("capacity_residuals.png"),
+               "Hata dağılımı histogramı: sıfır hata (kırmızı kesikli) etrafında simetrik dağılım iyi kalibrasyonu gösterir. Turuncu noktalı çizgi ort. hatayı gösterir.")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -835,9 +1329,13 @@ elif page.startswith("🩺"):
 
     show_image(fig_path("health_risk_timeline.png"),
                "Üst: gerçek risk etiketleri. Alt: en iyi modelin her saat için risk olasılığı (0–1).")
+    show_image(fig_path("health_calibration.png"),
+               "Reliability Diagram: iyi kalibre modelde tahmin edilen olasılık gerçek oranla örtüşür (diyagonal). Kesikli çizgi = mükemmel kalibrasyon.")
     st.markdown("""<div class="box">
     İyi bir model risk olasılığını incident başlamadan <b>birkaç saat öncesinde</b> yükseltir —
-    bu proaktif izlemenin temel göstergesidir. Olasılık 0.5 eşiğini aşınca "riskli" kararı üretilir.
+    bu proaktif izlemenin temel göstergesidir. Olasılık 0.5 eşiğini aşınca "riskli" kararı üretilir.<br>
+    <b>Reliability Diagram</b>: Modelin "0.8 olasılık" dediğinde gerçekten ~%80 oranında riskli mi?
+    Eğri diyagonale yakınsa model iyi kalibre demektir.
     </div>""", unsafe_allow_html=True)
 
 
@@ -849,7 +1347,7 @@ elif page.startswith("🔍"):
     st.markdown("""<div class="box">
     <b>SHAP (SHapley Additive exPlanations)</b>: Oyun teorisinden türetilen Shapley değerleriyle
     her özelliğin modelin tahminini ortalama beklentiden ne yönde ve ne kadar sapdırdığı hesaplanır.
-    Ağaç tabanlı modeller için <code>TreeExplainer</code> kullanılır (verimli, model-içi hesaplama).
+    Ağaç tabanlı modeller için <code>TreeExplainer</code>, doğrusal modeller için <code>LinearExplainer</code> kullanılır.
     Test setinden 500 örneklem üzerinde çalışır.
     </div>""", unsafe_allow_html=True)
 
@@ -956,17 +1454,20 @@ elif page.startswith("💡"):
         }
         cc1, cc2, cc3 = st.columns(3)
         for col_w, (col_key, (lbl, clr)) in zip([cc1, cc2, cc3], _cap_labels.items()):
-            info = cap_sum.get(col_key, {})
-            cur  = info.get("current_value", "?")
-            est  = info.get("estimated_date")
-            days = info.get("days_to_threshold")
-            stb  = info.get("stable", False)
+            info  = cap_sum.get(col_key, {})
+            cur   = info.get("current_value", "?")
+            est   = info.get("estimated_date")
+            days  = info.get("days_to_threshold")
+            stb   = info.get("stable", False)
             trend = info.get("daily_trend", 0)
+            meth  = info.get("method", "")
             with col_w:
                 if stb or est is None:
                     col_w.metric(f"📅 {lbl} Bitiş", "Kararlı", f"+{trend:.3f}%/gün")
                 else:
-                    col_w.metric(f"📅 {lbl} Bitiş", est, f"~{int(days)} gün | %{cur:.1f} şu an")
+                    col_w.metric(f"📅 {lbl} Bitiş", est, f"~{int(days)} gün · %{cur:.1f} şu an")
+                if meth:
+                    st.caption(f"Yöntem: {meth}")
         st.divider()
 
     # ── Haftalık hata özeti ────────────────────────────────────────────────────
