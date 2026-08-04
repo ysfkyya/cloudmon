@@ -12,11 +12,28 @@ BASE_DIR  = os.path.dirname(os.path.abspath(__file__))
 DATA_DIR  = os.path.join(BASE_DIR, "data")
 RESULTS_DIR = os.path.join(BASE_DIR, "results")
 
+# ── Kapasite senaryosu (mutlak değerler) ─────────────────────────────────────
+# vCPU  : 2000 toplam | Ocak 2025: 30 → Temmuz 2026: 1598 | ~8 ay sonra doluyor
+# Bellek: 8000 GB toplam | ~2450 GB → ~6700 GB | ~10 ay sonra eşiğe ulaşacak
+# Disk  : 500 TB toplam  | ~140 TB  → ~390 TB  | ~12 ay sonra eşiğe ulaşacak
+
+VCPU_TOTAL     = 2000    # toplam fiziksel vCPU kapasitesi
+VCPU_START     = 30      # Ocak 2025 başı
+VCPU_END       = 1598    # Temmuz 2026 sonu
+
+MEMORY_TOTAL_GB = 8000   # toplam küme RAM kapasitesi (GB)
+MEMORY_START_GB = 2450   # Ocak 2025 başı (~30.6%)
+MEMORY_END_GB   = 6720   # Temmuz 2026 sonu (~84.0%)
+
+DISK_TOTAL_TB   = 500    # toplam depolama kapasitesi (TB)
+DISK_START_TB   = 140    # Ocak 2025 başı (~28.0%)
+DISK_END_TB     = 390    # Temmuz 2026 sonu (~78.0%)
+
 # ── Kritik eşik değerleri ─────────────────────────────────────────────────────
 THRESHOLDS = {
-    "cpu_usage_percent":    85.0,
+    "vcpu_usage_percent":   90.0,   # vCPU tahsis oranı eşiği
     "memory_usage_percent": 88.0,
-    "disk_usage_percent":   82.0,
+    "disk_usage_percent":   85.0,
     "api_latency_ms":      1200.0,
     "error_rate_percent":    5.0,
 }
@@ -24,28 +41,21 @@ THRESHOLDS = {
 # ── ML kapasite tahmini parametreleri ─────────────────────────────────────────
 FORECAST_HORIZONS = [24, 72, 168]          # 1 gün / 3 gün / 1 hafta
 CAPACITY_TARGETS  = [
-    "cpu_usage_percent",
+    "vcpu_usage_percent",
     "memory_usage_percent",
     "disk_usage_percent",
 ]
 
-# ── Sağlık sınıflandırması parametreleri ──────────────────────────────────────
-RISK_HORIZON = 4   # kaç saat sonraki riski tahmin ediyoruz
-
 # ── Staj Dönemleri ────────────────────────────────────────────────────────────
-# vm_burst   : staj pik döneminde sisteme eklenen ortalama ek VM sayısı
-# cpu_extra  : CPU kullanımına eklenen yüzde puanı (pik)
-# mem_extra  : Bellek kullanımına eklenen yüzde puanı (pik)
-# error_extra: Hata oranına eklenen yüzde puanı (pik)
-# ramp_days  : Stajın başında/sonunda kademeli artış/azalış günü
 STAJ_PERIODS = [
     {
         "name":        "Kış Stajı 2025",
         "start":       "2025-02-01",
         "end":         "2025-03-14",
         "vm_burst":    80,
-        "cpu_extra":   11.0,
+        "vcpu_extra":  160,
         "mem_extra":   8.0,
+        "disk_extra":  4.0,
         "error_extra": 2.5,
         "ramp_days":   7,
     },
@@ -54,8 +64,9 @@ STAJ_PERIODS = [
         "start":       "2025-06-01",
         "end":         "2025-09-12",
         "vm_burst":    185,
-        "cpu_extra":   22.0,
+        "vcpu_extra":  370,
         "mem_extra":   15.0,
+        "disk_extra":  8.0,
         "error_extra": 3.8,
         "ramp_days":   14,
     },
@@ -64,8 +75,9 @@ STAJ_PERIODS = [
         "start":       "2026-01-10",
         "end":         "2026-02-27",
         "vm_burst":    105,
-        "cpu_extra":   13.0,
+        "vcpu_extra":  210,
         "mem_extra":   10.0,
+        "disk_extra":  5.0,
         "error_extra": 3.0,
         "ramp_days":   7,
     },
@@ -74,51 +86,23 @@ STAJ_PERIODS = [
         "start":       "2026-06-01",
         "end":         "2026-07-01",
         "vm_burst":    155,
-        "cpu_extra":   19.0,
+        "vcpu_extra":  310,
         "mem_extra":   13.0,
+        "disk_extra":  7.0,
         "error_extra": 3.5,
         "ramp_days":   14,
     },
 ]
 
-# ── Kapasite Genişlemeleri (yeni donanım alımları) ───────────────────────────
-# Yeni compute node / depolama eklendiğinde kullanım yüzdesi anlık düşer.
-# *_reduction: o metriğin kullanım yüzdesinden düşülecek puan
-CAPACITY_EXPANSIONS = [
-    {
-        "name":          "Disk Depolama Genişlemesi — Mayıs 2025",
-        "date":          "2025-05-10",
-        "cpu_reduction":  0.0,
-        "mem_reduction":  0.0,
-        "disk_reduction": 16.0,
-    },
-    {
-        "name":          "Sonbahar 2025 Compute Alımı (8 yeni node)",
-        "date":          "2025-10-20",
-        "cpu_reduction":  14.0,
-        "mem_reduction":  11.0,
-        "disk_reduction":  0.0,
-    },
-    {
-        "name":          "İlkbahar 2026 Compute Alımı (5 yeni node)",
-        "date":          "2026-03-05",
-        "cpu_reduction":   9.0,
-        "mem_reduction":   7.0,
-        "disk_reduction":  0.0,
-    },
-]
-
 # ── Incident Tanımları (15 olay — 18 ay boyunca) ─────────────────────────────
-# buildup_days: olaydan kaç gün önce göstergeler bozulmaya başlar
 INCIDENTS = [
-    # ── Oca–Ağu 2025 ──
     {
         "name":          "Kış Stajı Keystone Kimlik Aşırı Yükü",
         "start":         "2025-02-06",
         "peak":          "2025-02-08",
         "end":           "2025-02-12",
         "buildup_days":  3,
-        "cpu_spike":     10.0,
+        "vcpu_spike":    80.0,
         "memory_spike":  14.0,
         "disk_spike":     0.0,
         "latency_spike": 680.0,
@@ -130,33 +114,33 @@ INCIDENTS = [
         "peak":          "2025-03-20",
         "end":           "2025-03-23",
         "buildup_days":  2,
-        "cpu_spike":     18.0,
+        "vcpu_spike":    120.0,
         "memory_spike":   8.0,
         "disk_spike":     0.0,
         "latency_spike": 540.0,
         "error_spike":    6.0,
     },
     {
-        "name":          "Disk G/Ç Yavaşlaması — Depolama Öncesi",
+        "name":          "Disk G/Ç Yavaşlaması",
         "start":         "2025-05-02",
         "peak":          "2025-05-04",
         "end":           "2025-05-07",
         "buildup_days":  4,
-        "cpu_spike":      6.0,
+        "vcpu_spike":     40.0,
         "memory_spike":   4.0,
-        "disk_spike":     0.0,
+        "disk_spike":    12.0,
         "latency_spike": 820.0,
         "error_spike":    7.0,
     },
     {
-        "name":          "Yaz Stajı Pik — CPU Baskısı",
+        "name":          "Yaz Stajı Pik — Kaynak Baskısı",
         "start":         "2025-07-14",
         "peak":          "2025-07-17",
         "end":           "2025-07-21",
         "buildup_days":  3,
-        "cpu_spike":     30.0,
+        "vcpu_spike":    200.0,
         "memory_spike":  19.0,
-        "disk_spike":     0.0,
+        "disk_spike":     4.0,
         "latency_spike": 820.0,
         "error_spike":    9.0,
     },
@@ -166,20 +150,19 @@ INCIDENTS = [
         "peak":          "2025-08-21",
         "end":           "2025-08-25",
         "buildup_days":  2,
-        "cpu_spike":     14.0,
+        "vcpu_spike":     90.0,
         "memory_spike":  10.0,
         "disk_spike":     0.0,
         "latency_spike": 1900.0,
         "error_spike":   16.0,
     },
-    # ── Eyl 2025–Haz 2026 ──
     {
         "name":          "Bellek Baskısı — Hesaplama Grubu A",
         "start":         "2025-09-20",
         "peak":          "2025-09-22",
         "end":           "2025-09-26",
         "buildup_days":  5,
-        "cpu_spike":     12.0,
+        "vcpu_spike":     80.0,
         "memory_spike":  38.0,
         "disk_spike":     0.0,
         "latency_spike": 420.0,
@@ -191,19 +174,19 @@ INCIDENTS = [
         "peak":          "2025-10-13",
         "end":           "2025-10-17",
         "buildup_days":  7,
-        "cpu_spike":      6.0,
+        "vcpu_spike":     40.0,
         "memory_spike":   8.0,
         "disk_spike":    22.0,
         "latency_spike": 260.0,
         "error_spike":    5.5,
     },
     {
-        "name":          "Yüksek CPU Yükü Olayı",
+        "name":          "Yüksek vCPU Kullanım Olayı",
         "start":         "2025-11-12",
         "peak":          "2025-11-15",
         "end":           "2025-11-19",
         "buildup_days":  3,
-        "cpu_spike":     48.0,
+        "vcpu_spike":    320.0,
         "memory_spike":  18.0,
         "disk_spike":     0.0,
         "latency_spike": 920.0,
@@ -215,7 +198,7 @@ INCIDENTS = [
         "peak":          "2025-12-28",
         "end":           "2026-01-02",
         "buildup_days":  2,
-        "cpu_spike":     30.0,
+        "vcpu_spike":    200.0,
         "memory_spike":  22.0,
         "disk_spike":     5.0,
         "latency_spike": 1100.0,
@@ -227,7 +210,7 @@ INCIDENTS = [
         "peak":          "2026-01-25",
         "end":           "2026-01-29",
         "buildup_days":  2,
-        "cpu_spike":     22.0,
+        "vcpu_spike":    140.0,
         "memory_spike":  16.0,
         "disk_spike":     0.0,
         "latency_spike": 3400.0,
@@ -239,7 +222,7 @@ INCIDENTS = [
         "peak":          "2026-02-14",
         "end":           "2026-02-17",
         "buildup_days":  3,
-        "cpu_spike":     10.0,
+        "vcpu_spike":     70.0,
         "memory_spike":   8.0,
         "disk_spike":     0.0,
         "latency_spike": 2600.0,
@@ -251,7 +234,7 @@ INCIDENTS = [
         "peak":          "2026-03-20",
         "end":           "2026-03-24",
         "buildup_days":  4,
-        "cpu_spike":     26.0,
+        "vcpu_spike":    170.0,
         "memory_spike":  10.0,
         "disk_spike":     0.0,
         "latency_spike": 2200.0,
@@ -263,7 +246,7 @@ INCIDENTS = [
         "peak":          "2026-04-23",
         "end":           "2026-04-27",
         "buildup_days":  3,
-        "cpu_spike":     35.0,
+        "vcpu_spike":    230.0,
         "memory_spike":  25.0,
         "disk_spike":     8.0,
         "latency_spike": 1500.0,
@@ -275,7 +258,7 @@ INCIDENTS = [
         "peak":          "2026-05-13",
         "end":           "2026-05-17",
         "buildup_days":  5,
-        "cpu_spike":     45.0,
+        "vcpu_spike":    290.0,
         "memory_spike":  34.0,
         "disk_spike":    14.0,
         "latency_spike": 3000.0,
@@ -287,7 +270,7 @@ INCIDENTS = [
         "peak":          "2026-06-17",
         "end":           "2026-06-21",
         "buildup_days":  3,
-        "cpu_spike":     18.0,
+        "vcpu_spike":    120.0,
         "memory_spike":  12.0,
         "disk_spike":     0.0,
         "latency_spike": 1800.0,

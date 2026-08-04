@@ -6,8 +6,8 @@ Kapasite tahmin modülleri.
   • Rastgele Orman    (RandomForestRegressor)
   • Gradient Boosting (GradientBoostingRegressor)
 
-Her kaynak (CPU / Bellek / Disk) × her zaman ufku (24h / 72h) için ayrı modeller
-eğitilir. Sonuçlar results/reports/capacity_results.json dosyasına yazılır.
+Her kaynak (vCPU / Bellek / Disk) × her zaman ufku (24h / 72h / 168h) için ayrı
+modeller eğitilir. Sonuçlar results/reports/capacity_results.json dosyasına yazılır.
 """
 
 import os
@@ -19,10 +19,10 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import seaborn as sns
-from sklearn.linear_model     import LinearRegression
-from sklearn.ensemble         import RandomForestRegressor, GradientBoostingRegressor
-from sklearn.preprocessing    import StandardScaler
-from sklearn.metrics          import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.linear_model  import LinearRegression
+from sklearn.ensemble      import RandomForestRegressor, GradientBoostingRegressor
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics       import mean_absolute_error, mean_squared_error, r2_score
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from config import CAPACITY_TARGETS, FORECAST_HORIZONS, THRESHOLDS, RESULTS_DIR, DATA_DIR, TRAIN_END_DATE, END_DATE
@@ -30,20 +30,18 @@ from config import CAPACITY_TARGETS, FORECAST_HORIZONS, THRESHOLDS, RESULTS_DIR,
 _MODEL_DIR = os.path.join(DATA_DIR, "processed", "models")
 os.makedirs(_MODEL_DIR, exist_ok=True)
 
-# Model isimleri ve sınıfları
 _MODELS = {
-    "Linear Regression":        LinearRegression(),
-    "Random Forest":            RandomForestRegressor(
-                                    n_estimators=200, max_depth=12,
-                                    min_samples_leaf=4, n_jobs=-1, random_state=42),
-    "Gradient Boosting":        GradientBoostingRegressor(
-                                    n_estimators=200, max_depth=5,
-                                    learning_rate=0.08, subsample=0.85,
-                                    random_state=42),
+    "Linear Regression": LinearRegression(),
+    "Random Forest":     RandomForestRegressor(
+                             n_estimators=200, max_depth=12,
+                             min_samples_leaf=4, n_jobs=-1, random_state=42),
+    "Gradient Boosting": GradientBoostingRegressor(
+                             n_estimators=200, max_depth=5,
+                             learning_rate=0.08, subsample=0.85, random_state=42),
 }
 
 _RESOURCE_LABELS = {
-    "cpu_usage_percent":    "CPU Kullanımı (%)",
+    "vcpu_usage_percent":   "vCPU Kullanımı (%)",
     "memory_usage_percent": "Bellek Kullanımı (%)",
     "disk_usage_percent":   "Disk Kullanımı (%)",
 }
@@ -59,35 +57,31 @@ def train_capacity_models(datasets: dict) -> dict:
     Döndürür : sonuçları içeren iç içe sözlük
     """
     all_results = {}
-    scaler_cache = {}  # (col, h) için ortak scaler
 
-    for (col, h), ds in datasets.items():
+    for (col, h), ds in [(k, v) for k, v in datasets.items() if isinstance(k, tuple)]:
         X_train, y_train = ds["X_train"], ds["y_train"]
         X_test,  y_test  = ds["X_test"],  ds["y_test"]
         fnames            = ds["feature_names"]
         ts_test           = ds["timestamps_test"]
 
-        # Özellik ölçekleme (LR için önemli, RF/GBT için zararsız)
-        scaler = StandardScaler()
-        X_tr_s = scaler.fit_transform(X_train)
-        X_te_s = scaler.transform(X_test)
-        scaler_cache[(col, h)] = scaler
+        scaler  = StandardScaler()
+        X_tr_s  = scaler.fit_transform(X_train)
+        X_te_s  = scaler.transform(X_test)
 
         key = f"{col}_{h}h"
         all_results[key] = {
-            "resource":       col,
-            "horizon_h":      h,
-            "feature_names":  fnames,
+            "resource":        col,
+            "horizon_h":       h,
+            "feature_names":   fnames,
             "timestamps_test": ts_test,
-            "y_test":         y_test,
-            "models":         {},
+            "y_test":          y_test,
+            "models":          {},
         }
 
         for mname, model_proto in _MODELS.items():
             import copy
             model = copy.deepcopy(model_proto)
 
-            # Doğrusal model ölçeklenmiş veri kullanır
             if "Linear" in mname:
                 model.fit(X_tr_s, y_train)
                 y_pred = model.predict(X_te_s)
@@ -100,26 +94,23 @@ def train_capacity_models(datasets: dict) -> dict:
             r2   = r2_score(y_test, y_pred)
             mape = _mape(y_test, y_pred)
 
-            # Modeli kaydet
             model_path = os.path.join(
                 _MODEL_DIR, f"capacity_{col}_{h}h_{mname.lower().replace(' ', '_')}.pkl"
             )
-            joblib.dump({"model": model, "scaler": scaler, "feature_names": fnames},
-                        model_path)
+            joblib.dump({"model": model, "scaler": scaler, "feature_names": fnames}, model_path)
 
             all_results[key]["models"][mname] = {
-                "MAE":   round(mae,  4),
-                "RMSE":  round(rmse, 4),
-                "R2":    round(r2,   4),
-                "MAPE":  round(mape, 4),
+                "MAE":    round(mae,  4),
+                "RMSE":   round(rmse, 4),
+                "R2":     round(r2,   4),
+                "MAPE":   round(mape, 4),
                 "y_pred": y_pred,
             }
 
-            print(f"    [{col} | {h}h | {mname}]  MAE={mae:.2f}  RMSE={rmse:.2f}  R²={r2:.4f}")
+            print(f"    [{_RESOURCE_LABELS.get(col, col)} | {h}s | {mname}]  "
+                  f"MAE={mae:.2f}  RMSE={rmse:.2f}  R²={r2:.4f}")
 
-    # JSON raporu kaydet (y_pred dizileri hariç)
     _save_capacity_report(all_results)
-    # Görselleştirmeler
     _plot_model_comparison(all_results)
     _plot_forecasts(all_results)
     _plot_residuals(all_results)
@@ -131,8 +122,8 @@ def _save_capacity_report(results: dict) -> None:
     report = {}
     for key, val in results.items():
         report[key] = {
-            "resource":   val["resource"],
-            "horizon_h":  val["horizon_h"],
+            "resource":  val["resource"],
+            "horizon_h": val["horizon_h"],
             "models": {
                 mn: {k: v for k, v in mv.items() if k != "y_pred"}
                 for mn, mv in val["models"].items()
@@ -149,16 +140,15 @@ def _best_model_name(models_dict: dict) -> str:
 
 
 def _plot_model_comparison(results: dict) -> None:
-    """Her kaynak × horizon için model RMSE karşılaştırma bar grafiği."""
     rows = []
     for key, val in results.items():
         for mname, metrics in val["models"].items():
             rows.append({
-                "Kaynak":   _RESOURCE_LABELS.get(val["resource"], val["resource"]),
-                "Ufuk":     f"{val['horizon_h']}s",
-                "Model":    mname,
-                "RMSE":     metrics["RMSE"],
-                "R²":       metrics["R2"],
+                "Kaynak": _RESOURCE_LABELS.get(val["resource"], val["resource"]),
+                "Ufuk":   f"{val['horizon_h']}s",
+                "Model":  mname,
+                "RMSE":   metrics["RMSE"],
+                "R²":     metrics["R2"],
             })
     df = pd.DataFrame(rows)
 
@@ -182,17 +172,19 @@ def _plot_model_comparison(results: dict) -> None:
 
 
 def _plot_forecasts(results: dict) -> None:
-    """Her kaynak için gerçek vs. tahmin zaman serisi grafiği (en iyi model)."""
     n_rows = len(CAPACITY_TARGETS)
     fig, axes = plt.subplots(n_rows, len(FORECAST_HORIZONS),
                               figsize=(14, 4 * n_rows), squeeze=False)
-    test_period = f"{pd.Timestamp(TRAIN_END_DATE).strftime('%b %Y')} – {pd.Timestamp(END_DATE).strftime('%b %Y')}"
+    test_period = (f"{pd.Timestamp(TRAIN_END_DATE).strftime('%b %Y')} – "
+                   f"{pd.Timestamp(END_DATE).strftime('%b %Y')}")
     fig.suptitle(f"Kapasite Tahmin Sonuçları — Test Dönemi ({test_period})", fontsize=12)
 
     for r_idx, col in enumerate(CAPACITY_TARGETS):
         for h_idx, h in enumerate(FORECAST_HORIZONS):
-            key      = f"{col}_{h}h"
-            val      = results[key]
+            key    = f"{col}_{h}h"
+            val    = results.get(key)
+            if val is None:
+                continue
             ts_test  = val["timestamps_test"]
             y_test   = val["y_test"]
             best_m   = _best_model_name(val["models"])
@@ -200,8 +192,8 @@ def _plot_forecasts(results: dict) -> None:
             r2       = val["models"][best_m]["R2"]
 
             ax = axes[r_idx][h_idx]
-            ax.plot(ts_test, y_test,  label="Gerçek",  color="steelblue",  linewidth=0.8)
-            ax.plot(ts_test, y_pred,  label="Tahmin",  color="crimson",    linewidth=0.8, linestyle="--")
+            ax.plot(ts_test, y_test,  label="Gerçek", color="steelblue",  linewidth=0.8)
+            ax.plot(ts_test, y_pred,  label="Tahmin", color="crimson",    linewidth=0.8, linestyle="--")
             ax.set_title(
                 f"{_RESOURCE_LABELS.get(col, col)} — {h}s ufku\n"
                 f"({best_m}, R²={r2:.3f})",
@@ -214,11 +206,8 @@ def _plot_forecasts(results: dict) -> None:
                 ax.set_ylabel(_RESOURCE_LABELS.get(col, col))
             if r_idx == 0 and h_idx == 0:
                 ax.legend(fontsize=8)
-
-            # Kritik eşik çizgisi
             if col in THRESHOLDS:
-                ax.axhline(THRESHOLDS[col], color="red", linestyle=":", linewidth=0.8,
-                           label="Eşik" if (r_idx == 0 and h_idx == 0) else None)
+                ax.axhline(THRESHOLDS[col], color="red", linestyle=":", linewidth=0.8)
 
     plt.tight_layout()
     out = os.path.join(RESULTS_DIR, "figures", "capacity_forecasts.png")
@@ -228,7 +217,6 @@ def _plot_forecasts(results: dict) -> None:
 
 
 def _plot_residuals(results: dict) -> None:
-    """Her kaynak × ufuk için en iyi modelin hata dağılımı histogramı."""
     n_rows = len(CAPACITY_TARGETS)
     n_cols = len(FORECAST_HORIZONS)
     fig, axes = plt.subplots(n_rows, n_cols, figsize=(5 * n_cols, 4 * n_rows), squeeze=False)
@@ -236,8 +224,8 @@ def _plot_residuals(results: dict) -> None:
 
     for r_idx, col in enumerate(CAPACITY_TARGETS):
         for h_idx, h in enumerate(FORECAST_HORIZONS):
-            key    = f"{col}_{h}h"
-            val    = results.get(key)
+            key = f"{col}_{h}h"
+            val = results.get(key)
             if val is None:
                 continue
             best_m    = _best_model_name(val["models"])
@@ -247,7 +235,7 @@ def _plot_residuals(results: dict) -> None:
 
             ax = axes[r_idx][h_idx]
             ax.hist(residuals, bins=50, color="steelblue", alpha=0.78, edgecolor="none")
-            ax.axvline(0,                color="red",    linewidth=1.4, linestyle="--", label="Sıfır hata")
+            ax.axvline(0,                color="red",    linewidth=1.4, linestyle="--")
             ax.axvline(residuals.mean(), color="orange", linewidth=1.1, linestyle=":",
                        label=f"Ort={residuals.mean():.2f}%")
             ax.set_title(
@@ -271,19 +259,9 @@ def predict_days_to_threshold(feature_df: pd.DataFrame,
                                capacity_results: dict,
                                col: str = "disk_usage_percent") -> dict:
     """
-    Her kaynak için 24s ufuklu en iyi ML modeli ile iteratif tahmin yapar.
-
-    Strateji:
-      1. capacity_results'tan 24s ufku için en düşük RMSE'li modeli seç.
-      2. Son feature satırından başlayarak 24 saatlik adımlarla ileriye tahmin yap.
-      3. Her adımda lag / rolling-mean / rolling-std / delta özelliklerini
-         tahmin edilen değerle güncelle; zaman özelliklerini gerçek tarihe çek.
-      4. Tahmin eşiği aşınca tarihi döndür.
-
-    ML modeli yoksa medyan-slope doğrusal ekstrapolasyona düşer.
+    24s ufuklu en iyi ML modeli ile iteratif ileriye tahmin yapar.
+    Eşiğe ulaşma tarihini ve günlük trendi döndürür.
     """
-    import joblib
-
     last_ts = feature_df.index[-1]
     thr     = THRESHOLDS.get(col, 90.0)
     current = float(feature_df[col].dropna().iloc[-1])
@@ -296,10 +274,9 @@ def predict_days_to_threshold(feature_df: pd.DataFrame,
             "daily_trend": 0.0, "method": "ML", "as_of": str(last_ts),
         }
 
-    # ── En iyi 24s modeli yükle ───────────────────────────────────────────────
-    key_24 = f"{col}_24h"
-    val_24 = capacity_results.get(key_24, {})
-    best_m = None
+    key_24  = f"{col}_24h"
+    val_24  = capacity_results.get(key_24, {})
+    best_m  = None
     if val_24 and val_24.get("models"):
         best_m = min(val_24["models"].items(), key=lambda x: x[1]["RMSE"])[0]
 
@@ -318,12 +295,8 @@ def predict_days_to_threshold(feature_df: pd.DataFrame,
     scaler        = pkg.get("scaler")
     feature_names = list(pkg["feature_names"])
 
-    # ── Başlangıç değerleri ───────────────────────────────────────────────────
-    # Son 168 saatin ham değerleri: lag ve rolling hesabı için tutulur
-    hist = feature_df[col].dropna().values[-168:].tolist()
-
-    # Diğer özellikler (log sayıları, diğer metrikler) son bilinen değerde sabit
-    base = {}
+    hist    = feature_df[col].dropna().values[-168:].tolist()
+    base    = {}
     for f in feature_names:
         if f in feature_df.columns:
             v = feature_df[f].dropna()
@@ -332,7 +305,7 @@ def predict_days_to_threshold(feature_df: pd.DataFrame,
             base[f] = 0.0
 
     STEP_H    = 24
-    MAX_STEPS = 730 * 24 // STEP_H   # maks 2 yıl
+    MAX_STEPS = 730 * 24 // STEP_H
     elapsed_h = 0
 
     for _ in range(MAX_STEPS):
@@ -340,36 +313,25 @@ def predict_days_to_threshold(feature_df: pd.DataFrame,
         pred_ts = last_ts + pd.Timedelta(hours=elapsed_h)
         row = dict(base)
 
-        # Ham değer
         if col in feature_names:
             row[col] = hist[-1]
-
-        # Lag özellikleri
         for lag in [1, 6, 24, 48, 168]:
             f = f"{col}_lag_{lag}h"
             if f in feature_names:
                 row[f] = hist[max(0, len(hist) - lag)]
-
-        # Rolling mean
         for w in [3, 6, 12, 24, 168]:
             f = f"{col}_rmean_{w}h"
             if f in feature_names:
                 row[f] = float(np.mean(hist[-w:]))
-
-        # Rolling std
         for w in [3, 6, 12, 24]:
             f = f"{col}_rstd_{w}h"
             if f in feature_names:
                 wv = hist[-w:]
                 row[f] = float(np.std(wv)) if len(wv) > 1 else 0.0
-
-        # Delta özellikleri
         for d in [1, 6, 24]:
             f = f"{col}_delta_{d}h"
             if f in feature_names:
                 row[f] = hist[-1] - hist[max(0, len(hist) - d)]
-
-        # Zaman özellikleri
         _time_map = {
             "hour_of_day":      pred_ts.hour,
             "day_of_week":      pred_ts.dayofweek,
@@ -388,7 +350,6 @@ def predict_days_to_threshold(feature_df: pd.DataFrame,
             X = scaler.transform(X)
 
         predicted = float(np.clip(model.predict(X)[0], 0.0, 100.0))
-
         hist.append(predicted)
         if len(hist) > 168:
             hist = hist[-168:]
@@ -408,7 +369,6 @@ def predict_days_to_threshold(feature_df: pd.DataFrame,
                 "as_of":             str(last_ts),
             }
 
-    # Eşiğe 2 yıl içinde ulaşılamadı → kararlı
     return {
         "resource": col, "current_value": round(current, 2),
         "threshold": thr, "days_to_threshold": None,
@@ -418,19 +378,17 @@ def predict_days_to_threshold(feature_df: pd.DataFrame,
     }
 
 
-def _threshold_fallback(feature_df: pd.DataFrame, col: str,
-                         last_ts, thr: float, current: float) -> dict:
-    """ML modeli mevcut değilse medyan-slope ile düz çizgi ekstrapolasyonu."""
+def _threshold_fallback(feature_df, col, last_ts, thr, current):
     vals   = feature_df[col].dropna().values
     if len(vals) < 48:
         return {"resource": col, "current_value": round(current, 2), "threshold": thr,
                 "days_to_threshold": None, "estimated_date": None, "stable": True,
                 "daily_trend": 0.0, "method": "fallback", "as_of": str(last_ts)}
-    window = min(720, len(vals) - 24)
-    recent = vals[-window:]
+    window  = min(720, len(vals) - 24)
+    recent  = vals[-window:]
     changes = np.array([recent[i + 24] - recent[i] for i in range(len(recent) - 24)])
     slope   = float(np.median(changes))
-    if slope < 0.02:
+    if slope < 0.005:
         return {"resource": col, "current_value": round(current, 2), "threshold": thr,
                 "days_to_threshold": None, "estimated_date": None, "stable": True,
                 "daily_trend": round(slope, 4), "method": "fallback", "as_of": str(last_ts)}

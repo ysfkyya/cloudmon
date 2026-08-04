@@ -2,7 +2,7 @@
 
 > **OpenStack ortamları için uçtan uca yapay zekâ destekli izleme platformu.**
 > Gerçek zamanlı metrik + log verilerini analiz eder, kapasiteyi 24 / 72 / 168 saat öncesinden tahmin eder,
-> sistem sağlık riskini erken uyarı sinyalleriyle tespit eder ve operatöre önceliklendirilmiş aksiyonlar sunar.
+> çok aşamalı log işleme hattıyla ön-arıza sinyallerini tespit eder ve operatöre önceliklendirilmiş aksiyonlar sunar.
 
 ---
 
@@ -11,10 +11,10 @@
 1. [Motivasyon ve Problem Tanımı](#-motivasyon-ve-problem-tanımı)
 2. [Sistem Mimarisi](#-sistem-mimarisi)
 3. [Pipeline Akışı](#-pipeline-akışı)
-4. [Veri Katmanı](#-veri-katmanı)
-5. [Özellik Mühendisliği](#-özellik-mühendisliği)
-6. [Kapasite Tahmini](#-kapasite-tahmini)
-7. [Sağlık Riski Sınıflandırması](#-sağlık-riski-sınıflandırması)
+4. [Veri Katmanı — Kapasite Senaryosu](#-veri-katmanı--kapasite-senaryosu)
+5. [Log Verisi ve 4 Aşamalı Log İşleme Hattı](#-log-verisi-ve-4-aşamalı-log-işleme-hattı)
+6. [Özellik Mühendisliği](#-özellik-mühendisliği)
+7. [Kapasite Tahmini](#-kapasite-tahmini)
 8. [SHAP Açıklanabilirlik](#-shap-açıklanabilirlik)
 9. [Öneri Motoru](#-öneri-motoru)
 10. [LLM Entegrasyonu](#-llm-entegrasyonu)
@@ -47,22 +47,22 @@ Sistem yöneticisi yangın söndürür, olayın kök nedenini araştırmak için
 ince sinyaller birikmektedir:
 
 ```
-Normal  →  [buildup: CPU yavaşça artar]  →  [risk penceresi]  →  KRİTİK ARIZA
-           ←──── ML bunu öğrenir ────→        ←── alarm burada ──→
+Normal  →  [buildup: yavaş yanıtlar, bellek baskısı, bağlantı uyarıları]  →  KRİTİK ARIZA
+           ←────────────── Log Pipeline bunu önceden sezar ─────────────→    ←── alarm ──→
 ```
 
-CloudMon bu *buildup* örüntülerini makine öğrenmesiyle tespit ederek operatöre
-**olay gerçekleşmeden önce** uyarı verir.
+CloudMon bu *buildup* örüntülerini log verisi üzerinden istatistiksel analiz ve makine
+öğrenmesiyle tespit ederek operatöre **olay gerçekleşmeden önce** uyarı verir.
 
 ### Bu Çalışmanın Katkısı
 
 | Geleneksel Yaklaşım | CloudMon |
 |---|---|
 | Eşik aşıldığında alarm | Eşiğe kaç gün kaldığını tahmin eder |
-| Tek metrik bazlı karar | Metrik + log verisi birleşik analiz |
+| Tek metrik bazlı karar | Metrik + 15 tip log verisi birleşik analiz |
 | Açıklanamayan alarm | SHAP ile "neden alarm?" sorusu yanıtlanır |
 | Operatörün tecrübesine bağlı | Önceliklendirilmiş aksiyonlar otomatik üretilir |
-| Reaktif | Proaktif |
+| Reaktif | Proaktif — ön-arıza örüntüleri saatler öncesinde tespit edilir |
 
 ---
 
@@ -75,55 +75,51 @@ CloudMon bu *buildup* örüntülerini makine öğrenmesiyle tespit ederek operat
 ║   Prometheus / Thanos                  OpenSearch                    ║
 ║   ┌─────────────────────┐              ┌──────────────────────────┐  ║
 ║   │  /api/v1/query_range│              │  openstack-logs-* index  │  ║
-║   │  CPU · Bellek · Disk│              │  Nova · Keystone         │  ║
+║   │  vCPU · Bellek · Disk│             │  Nova · Keystone         │  ║
 ║   │  Gecikme · Hata oranı│             │  Neutron · Cinder        │  ║
 ║   └──────────┬──────────┘              └──────────────┬───────────┘  ║
 ╚═════════════╪══════════════════════════════════════════╪═════════════╝
-              │  saatlik metrikler (9 sütun)            │  log sayımları
+              │  saatlik metrikler                      │  15 tip log sayımı
               └──────────────────┬──────────────────────┘
                                  │
                                  ▼
               ┌──────────────────────────────────────┐
+              │      4 AŞAMALI LOG İŞLEME HATTI       │
+              │  Ayrıştırma → Agregasyon →            │
+              │  Anomali Tespiti → Ön-Arıza Örüntüsü  │
+              └──────────────┬───────────────────────┘
+                             │  log_insights
+                             ▼
+              ┌──────────────────────────────────────┐
               │         ÖZELLİK MÜHENDİSLİĞİ         │
               │  rolling · lag · delta · zaman        │
-              │  9 ham + 18 log + ~180 türetilmiş     │
-              │  ────────────────────────────────     │
-              │  Toplam: ~208 özellik sütunu          │
+              │  erken uyarı log kompoziti            │
+              │  Toplam: ~272 özellik sütunu          │
               └──────────────┬───────────────────────┘
                              │
               ┌──────────────┴─────────────────┐
               │                                │
               ▼                                ▼
 ┌─────────────────────────┐       ┌───────────────────────────┐
-│    KAPASİTE TAHMİNİ     │       │   SAĞLIK SINIFLANDIRMASI  │
+│    KAPASİTE TAHMİNİ     │       │   SHAP AÇIKLANABILIRLIK   │
 │                         │       │                           │
-│  3 kaynak × 3 ufuk      │       │   Binary (Riskli/Güvenli) │
-│  × 3 model = 27 model   │       │   Sonraki 4 saat riski    │
-│                         │       │   3 model → F1 ile seçim  │
-│  LR · RF · GBT          │       │   LR · RF · GBT           │
-│  ★ RMSE ile model seçimi│       │   ★ F1 ile model seçimi   │
+│  3 kaynak × 3 ufuk      │       │  TreeExplainer /          │
+│  × 3 model = 27 model   │       │  LinearExplainer          │
+│                         │       │  Top özellik → aksiyon    │
+│  LR · RF · GBT          │       │                           │
+│  ★ RMSE ile model seçimi│       │                           │
 └──────────────┬──────────┘       └───────────────┬───────────┘
                │                                  │
                └────────────────┬─────────────────┘
                                 │
                                 ▼
                ┌────────────────────────────────────┐
-               │         SHAP AÇIKLANABILIRLIK       │
-               │                                    │
-               │   TreeExplainer (test seti 500 ör) │
-               │   Bar · Beeswarm · Dependence       │
-               │   → Özellik önem sıralaması         │
-               └──────────────────┬─────────────────┘
-                                  │
-                                  ▼
-               ┌────────────────────────────────────┐
                │           ÖNERİ MOTORU             │
                │                                    │
-               │  Kapasite trendi (72s ekstrapolasyon│
-               │  Sağlık riski (48s pencere ort.)    │
-               │  Trend bozulması (7g/7g karşılaştırma)│
-               │  + SHAP top özelliği                │
-               │  → Önceliklendirilmiş öneri listesi │
+               │  Kapasite trendi → eşiğe kaç gün? │
+               │  Log anomalileri → z-score bazlı   │
+               │  Ön-arıza örüntüleri → güven skoru │
+               │  Cascade riski → çoklu anomali     │
                └──────────────────┬─────────────────┘
                                   │
                                   ▼
@@ -132,7 +128,7 @@ CloudMon bu *buildup* örüntülerini makine öğrenmesiyle tespit ederek operat
                │                                    │
                │  Claude Sonnet (Anthropic)          │
                │  GPT-4o (OpenAI)                   │
-               │  → Aynı bağlam, yan yana yanıt     │
+               │  Metrik + Log içgörüleri birlikte  │
                └────────────────────────────────────┘
 ```
 
@@ -144,64 +140,87 @@ CloudMon bu *buildup* örüntülerini makine öğrenmesiyle tespit ederek operat
 flowchart TD
     A([▶ python main.py]) --> B
 
-    subgraph ADIM1 ["1️⃣  Veri Üretimi (~5 sn)"]
-        B[metrics_generator\nSaatlik CPU / Bellek / Disk\nGecikme / Hata / VM]
-        C[log_generator\nSaatlik servis hata sayımları\n18 sütun × 13 000+ satır]
-        D[raw_logs\n5 000 gerçekçi log satırı\nNova · Keystone · Neutron · Cinder]
+    subgraph ADIM1 ["1️⃣  Veri Üretimi"]
+        B[metrics_generator\nvCPU: 30→1598/2000 · Bellek: 2450→6720/8000 GB\nDisk: 140→390/500 TB · 13 104 saatlik gözlem]
+        C[log_generator\n15 tip log: 8 hata + 7 erken uyarı\n8 000 ham log satırı]
         B --> C
-        C --> D
     end
 
-    D --> E
+    C --> D
 
-    subgraph ADIM2 ["2️⃣  Özellik Mühendisliği (~2 sn)"]
-        E[Merge: metrik + log\ntimestamp üzerinden birleştir]
-        F[Rolling: 3h / 6h / 12h / 24h / 168h]
-        G[Lag: 1h / 6h / 24h / 48h / 168h]
-        H[Delta: 1h / 6h / 24h farkları]
-        I[Zaman: hour · day · weekend · business_hour]
-        E --> F --> G --> H --> I
+    subgraph ADIM2 ["2️⃣  Log İşleme Hattı (4 Aşama)"]
+        D[Aşama 1: Ayrıştırma & Sınıflandırma\nServis sağlık skoru · risk skoru]
+        E[Aşama 2: Zamansal Agregasyon\nRolling 6h/24h/72h · z-skor · 7g trend]
+        F[Aşama 3: Anomali Tespiti\nZ-skor bazlı · cascade tespiti]
+        G[Aşama 4: Ön-Arıza Örüntüsü\nHer incident öncesi buildup analizi\nGüven skoru · öncü süre]
+        D --> E --> F --> G
+    end
+
+    G --> H
+
+    subgraph ADIM3 ["3️⃣  Özellik Mühendisliği"]
+        H[Merge: metrik + log\n272 sütun özellik matrisi]
+        I[Rolling / Lag / Delta / Zaman\nErken uyarı kompozit skoru]
+        H --> I
     end
 
     I --> J
-    I --> K
 
-    subgraph ADIM3 ["3️⃣  Kapasite Tahmini (~8 dk)"]
-        J[Hedef: cpu / bellek / disk\n× 24h / 72h / 168h\n× LR / RF / GBT\n= 27 model]
-        J --> J1[★ En iyi model: RMSE bazlı seçim]
+    subgraph ADIM4 ["4️⃣  Kapasite Tahmini"]
+        J[vCPU · Bellek · Disk\n× 24h / 72h / 168h\n× LR / RF / GBT = 27 model]
+        J --> J1[★ RMSE bazlı model seçimi]
     end
 
-    subgraph ADIM4 ["4️⃣  Sağlık Sınıflandırması (~30 sn)"]
-        K[Risk etiketi: sonraki 4 saatte\nCPU > 85% VEYA Mem > 88%\nVEYA Error > 5% VEYA Lat > 1200ms]
-        K --> K1[LR / RF / GBT\n★ En iyi model: F1 bazlı seçim]
+    J1 --> K
+
+    subgraph ADIM5 ["5️⃣  SHAP Analizi"]
+        K[TreeExplainer + LinearExplainer\n9 kaynak×ufuk kombinasyonu\nBar + Beeswarm + Dependence]
     end
 
-    J1 --> L
-    K1 --> L
+    K --> L
 
-    subgraph ADIM5 ["5️⃣  SHAP (~40 sn)"]
-        L[TreeExplainer\n500 test örneği\nBar + Beeswarm + Dependence]
+    subgraph ADIM6 ["6️⃣  Öneri Üretimi"]
+        L[Kural Motoru\nKapasite + Log Anomali + Cascade + Ön-Arıza]
+        M[LLM\nMetrik + Log içgörüleri → Claude & GPT-4o]
+        L --> M
     end
 
-    L --> M
-
-    subgraph ADIM6 ["6️⃣  Öneri Motoru (<1 sn)"]
-        M[Kapasite trendi → eşiğe kaç gün?]
-        N[Sağlık riski → son 48s ortalama olasılık]
-        O[Trend → son 7g vs önceki 7g]
-        M --> P
-        N --> P
-        O --> P
-        P[Önceliklendirilmiş öneri listesi\n🔴 Kritik · 🟡 Uyarı · 🔵 Bilgi]
-    end
-
-    P --> Q([📊 dashboard.py — Streamlit Arayüzü])
-    P --> R([📄 results/reports/*.json + .txt])
+    M --> N([📄 results/reports/ — JSON + TXT])
 ```
 
 ---
 
-## 📥 Veri Katmanı
+## 📥 Veri Katmanı — Kapasite Senaryosu
+
+### Gerçekçi Büyüme Senaryosu
+
+CloudMon gerçek bir üniversite OpenStack kümesinin 18 aylık evrimini simüle eder.
+Küme, öğrenci sanal makine taleplerinin sürekli büyümesiyle aşamalı olarak dolmaktadır:
+
+| Kaynak | Toplam Kapasite | Ocak 2025 | Temmuz 2026 | Dolum Tahmini |
+|---|---|---|---|---|
+| **vCPU** | 2 000 vCPU | 30 vCPU (%1.5) | 1 598 vCPU (%79.9) | ~Mart 2027 (~8 ay) |
+| **Bellek** | 8 000 GB | 2 450 GB (%30.6) | 6 720 GB (%84.0) | ~Eylül 2026 (~2 ay) |
+| **Disk** | 500 TB | 140 TB (%28.0) | 390 TB (%78.0) | ~Kasım 2026 (~4 ay) |
+
+### İki Fazlı Büyüme Modeli
+
+vCPU büyümesi gerçekçi bir başlangıç hızlanması + olgunlaşma sürecini yansıtır:
+
+```
+Faz 1 (Oca 2025 – Oca 2026, 12 ay): Hızlı büyüme
+  → Başlangıç: 30 vCPU → 12. ay sonu: ~1 290 vCPU
+  → Ortalama: ~105 vCPU/ay
+
+Faz 2 (Oca 2026 – Tem 2026, 6 ay): Yavaşlayan büyüme
+  → 1 290 vCPU → 1 598 vCPU
+  → Ortalama: ~52 vCPU/ay
+  → Mevcut hızla: 8 ay içinde 2 000 limit dolacak
+```
+
+Bellek ve disk bu vCPU trendi ile koreleli üretilir (bağımsız varyasyon eklenerek).
+
+Her metrik hem **mutlak değer** (GB, TB, vCPU adedi) hem de **yüzde** (%kullanım) olarak saklanır.
 
 ### Simülasyon Kapsamı
 
@@ -214,157 +233,212 @@ flowchart TD
 | **Test seti** | Nis 2026 — Haz 2026 (3 ay) |
 | **Tekrarlanabilirlik** | `SEED = 42` |
 
-### Metrik Sinyali Nasıl Üretilir?
-
-Her saatlik metrik değeri 5 bileşenin toplamıdır:
-
-```
-değer(t) = taban_değer
-         + günlük_örüntü(t)          ← kosinüs: zirve 13:00, dip 04:00
-         + haftalık_örüntü(t)        ← hafta sonu %35 düşük yük
-         + uzun_vadeli_trend(t)      ← lineer artış (disk: +32 puan/18 ay)
-         + incident_etkisi(t)        ← Gauss profil × buildup gecikmesi
-         + Gauss_gürültü(t)          ← gerçekçilik için
-```
-
 ### 15 Tanımlı Incident
 
-Her incident, gerçek OpenStack arızalarından modellenerek üretilmiştir:
-
-| # | Olay | Dönem | CPU Spike | Latency Spike |
+| # | Olay | Dönem | vCPU Spike | Latency Spike |
 |---|---|---|---|---|
-| 1 | Kış Stajı Keystone Kimlik Aşırı Yükü | Şub 2025 | +10% | +680 ms |
-| 2 | Nova Zamanlayıcı Tıkanması | Mar 2025 | +18% | +540 ms |
-| 3 | Disk G/Ç Yavaşlaması | May 2025 | +6% | +820 ms |
-| 4 | Yaz Stajı Pik — CPU Baskısı | Tem 2025 | +30% | +820 ms |
-| 5 | Yaz Stajı DB Bağlantı Havuzu Tükenmesi | Ağu 2025 | +14% | +1900 ms |
-| 6 | Bellek Baskısı — Hesaplama Grubu A | Eyl 2025 | +12% | +420 ms |
-| 7 | Disk Kapasitesi Kritik Seviyeye Yaklaşıyor | Eki 2025 | +6% | +260 ms |
-| 8 | Yüksek CPU Yükü Olayı | Kas 2025 | +48% | +920 ms |
-| 9 | Yılsonu Trafik Artışı | Ara 2025–Oca 2026 | +30% | +1100 ms |
-| 10 | Kış Stajı DB Bağlantı Fırtınası | Oca 2026 | +22% | +3400 ms |
-| 11 | Ağ Katmanı Kesintisi | Şub 2026 | +10% | +2600 ms |
-| 12 | API Gecikme Bozunumu | Mar 2026 | +26% | +2200 ms |
-| 13 | Zamanlayıcı Kaynak Yetersizliği | Nis 2026 | +35% | +1500 ms |
-| 14 | Çok Kaynaklı Basamaklı Arıza | May 2026 | +45% | +3000 ms |
-| 15 | Yaz Stajı Keystone Kimlik Doğrulama Krizi | Haz 2026 | +18% | +1800 ms |
+| 1 | Kış Stajı Keystone Kimlik Aşırı Yükü | Şub 2025 | +80 vCPU | +680 ms |
+| 2 | Nova Zamanlayıcı Tıkanması | Mar 2025 | +120 vCPU | +540 ms |
+| 3 | Disk G/Ç Yavaşlaması | May 2025 | +40 vCPU | +820 ms |
+| 4 | Yaz Stajı Pik — Kaynak Baskısı | Tem 2025 | +200 vCPU | +820 ms |
+| 5 | Yaz Stajı DB Bağlantı Havuzu Tükenmesi | Ağu 2025 | +90 vCPU | +1900 ms |
+| 6 | Bellek Baskısı — Hesaplama Grubu A | Eyl 2025 | +80 vCPU | +420 ms |
+| 7 | Disk Kapasitesi Kritik Seviyeye Yaklaşıyor | Eki 2025 | +40 vCPU | +260 ms |
+| 8 | Yüksek vCPU Kullanım Olayı | Kas 2025 | +320 vCPU | +920 ms |
+| 9 | Yılsonu Trafik Artışı | Ara 2025–Oca 2026 | +200 vCPU | +1100 ms |
+| 10 | Kış Stajı DB Bağlantı Fırtınası | Oca 2026 | +140 vCPU | +3400 ms |
+| 11 | Ağ Katmanı Kesintisi | Şub 2026 | +70 vCPU | +2600 ms |
+| 12 | API Gecikme Bozunumu | Mar 2026 | +170 vCPU | +2200 ms |
+| 13 | Zamanlayıcı Kaynak Yetersizliği | Nis 2026 | +230 vCPU | +1500 ms |
+| 14 | Çok Kaynaklı Basamaklı Arıza | May 2026 | +290 vCPU | +3000 ms |
+| 15 | Yaz Stajı Keystone Kimlik Doğrulama Krizi | Haz 2026 | +120 vCPU | +1800 ms |
 
-### Staj Dönemleri ve Kapasite Genişlemeleri
+### Staj Dönemleri
 
-Sistem, gerçek bir üniversite altyapısını simüle eder. **Staj dönemlerinde** öğrencilerin
-sanal makine talebi önemli ölçüde artar:
+Sistem gerçek bir üniversite altyapısını simüle eder. **Staj dönemlerinde** öğrenci VM talebi belirgin şekilde artar:
 
-| Staj Dönemi | Süre | Ek VM | CPU +% | Bellek +% |
+| Staj Dönemi | Süre | Ek VM | vCPU + | Bellek + |
 |---|---|---|---|---|
-| Kış Stajı 2025 | Şub–Mar 2025 | +80 VM | +11% | +8% |
-| Yaz Stajı 2025 | Haz–Eyl 2025 | +185 VM | +22% | +15% |
-| Kış Stajı 2025–2026 | Oca–Şub 2026 | +105 VM | +13% | +10% |
-| Yaz Stajı 2026 | Haz–Tem 2026 | +155 VM | +19% | +13% |
-
-**Kapasite genişlemeleri** (donanım alımı) metrik değerlerinde anlık düşüşler yaratır:
-
-| Genişleme | Tarih | Etki |
-|---|---|---|
-| Disk Depolama Genişlemesi | May 2025 | Disk -%16 puan |
-| Sonbahar 2025 Compute Alımı (8 node) | Eki 2025 | CPU -%14, Bellek -%11 |
-| İlkbahar 2026 Compute Alımı (5 node) | Mar 2026 | CPU -%9, Bellek -%7 |
+| Kış Stajı 2025 | Şub–Mar 2025 | +80 VM | +160 vCPU | +8% |
+| Yaz Stajı 2025 | Haz–Eyl 2025 | +185 VM | +370 vCPU | +15% |
+| Kış Stajı 2025–2026 | Oca–Şub 2026 | +105 VM | +210 vCPU | +10% |
+| Yaz Stajı 2026 | Haz–Tem 2026 | +155 VM | +310 vCPU | +13% |
 
 ---
 
-## 📋 Log Verisi — Üretim ve Kullanım Akışı
+## 📋 Log Verisi ve 4 Aşamalı Log İşleme Hattı
 
-CloudMon iki paralel veri akışı işler: **metrik verisi** ve **log verisi**. Log verisi bağımsız bir sinyal kaynağıdır — bir metrik henüz eşiği geçmeden bile log hataları artmış olabilir.
+### Proaktif İzlemenin Temeli: Erken Uyarı Logları
 
-### Log Üretim Süreci
+CloudMon'un temel amacı **problem gelişimini önceden sezmektir**. Bu nedenle log üretimi
+yalnızca hata loglarıyla sınırlı değildir — sistem arızaya gitmeden önceki kritik **erken uyarı
+sinyallerini** de modellemektedir.
 
-`log_generator.py` → `generate_log_features()` fonksiyonu, metrik değerleriyle **korele ama bağımsız** saatlik log sayımları üretir:
+### 15 Log Tipi
 
-```
-cpu_factor  = max(0, (cpu_usage - 60) / 40)      ← %60 üstünde baskı başlar
-mem_factor  = max(0, (mem_usage  - 70) / 30)      ← %70 üstünde bellek baskısı
-lat_factor  = max(0, (latency    - 200) / 800)    ← 200ms üstünde gecikme baskısı
-err_factor  = error_rate / 100
+#### Hata Logları (8 tip — incident sırasında artar)
 
-nova_compute_errors ≈ req_base × err_factor × (1 + 2.5×cpu_f + 2.0×mem_f)
-keystone_errors     ≈ req_base × err_factor × (1 + 1.5×lat_f)
-quota_exceeded      ≈ err_factor × staj_intensity       ← staj dönemlerinde belirgin artış
-```
-
-Staj dönemlerinde `quota_exceeded_count`, `resource_exhausted_count` ve `scheduler_error_count` otomatik olarak yükselir.
-
-### Üretilen Log Sütunları
-
-| Kategori | Sütunlar |
-|---|---|
-| **Servis başına hata** | `nova_api_errors`, `nova_compute_errors`, `nova_scheduler_errors`, `keystone_errors`, `neutron_errors`, `cinder_errors` |
-| **Hata tipi sayımları** | `timeout_count`, `db_connection_count`, `resource_exhausted_count`, `quota_exceeded_count`, `auth_failure_count`, `network_error_count`, `scheduler_error_count`, `io_error_count`, `critical_count` |
-| **Agregat** | `total_errors`, `total_log_count`, `error_log_ratio` |
-
-### Log Verisi ML Pipeline'ında Nasıl Kullanılır?
-
-```
-log_features.csv (saatlik aggregasyon)
-       ↓
-build_feature_matrix() — metrics_df ile timestamp üzerinden LEFT JOIN
-       ↓
-10 log sayım sütunu → her biri için:
-   • rolling mean 6h   (son 6 saatin ortalaması)
-   • rolling sum  24h  (son 24 saatin birikimi)
-       ↓
-total_errors + error_log_ratio → lag özellikleri (1h / 6h / 24h / 48h / 168h)
-       ↓
-Tüm log özellikleri kapasite tahmini + sağlık sınıflandırması modellerine girer
-```
-
-### SHAP Analizi: Log Özelliklerinin Önemi
-
-Sağlık riski sınıflandırmasında log özellikleri anlamlı katkı sağlar:
-
-| Özellik | SHAP Önemi | Yorumu |
+| Log Tipi | Servisi | Anlamı |
 |---|---|---|
-| `total_errors_lag_24h` | ~0.012 | Önceki günün hata yükü bugünkü riski öngörür |
-| `total_errors_lag_6h` | ~0.003 | Kısa vadeli hata birikmesi |
-| `total_errors_rsum_24h` | ~0.003 | Son 24 saatin kümülatif hata sayısı |
-| `total_errors_lag_168h` | ~0.002 | Haftalık periyodik örüntü |
+| `nova_api_errors` | Nova API | VM yaşam döngüsü isteklerinin başarısız olması |
+| `nova_compute_errors` | Nova Compute | Hypervisor seviyesinde işlem hataları |
+| `nova_scheduler_errors` | Nova Scheduler | VM yerleştirme başarısızlıkları |
+| `keystone_errors` | Keystone | Kimlik doğrulama ve token hataları |
+| `neutron_errors` | Neutron | Ağ kaynak tahsis hataları |
+| `cinder_errors` | Cinder | Blok depolama I/O hataları |
+| `db_connection_count` | Tüm servisler | Veritabanı bağlantı havuzu hataları |
+| `critical_count` | Tüm servisler | CRITICAL seviye log sayısı |
 
-Log verisinin önemi düşük görünse de **kritik bir rolü** vardır: metriklerin henüz eşiği geçmediği buildup dönemlerinde log hataları artar ve sağlık modelinin önceden uyarı vermesini sağlar.
+#### Erken Uyarı Logları (7 tip — incident ÖNCESİNDE artar)
+
+| Log Tipi | Buildup Katsayısı | Anlamı |
+|---|---|---|
+| `slow_response_count` | 3.0× | API yanıt süresi artışı — henüz hata değil ama gecikmeli |
+| `memory_pressure_count` | 2.5× | Bellek serbest bırakma talepleri / GC baskısı uyarıları |
+| `connection_pool_warn_count` | 2.0× | Bağlantı havuzu doluluğu uyarısı — tükenmeden önce |
+| `scheduler_degradation_count` | 2.0× | Nova scheduler gecikme uyarıları |
+| `quota_pressure_count` | 2.5× | Kota sınırına yaklaşma uyarıları (staj döneminde belirgin) |
+| `disk_io_degradation_count` | 2.0× | Disk I/O gecikme artışı — henüz kritik değil |
+| `cascade_indicator_count` | 3.5× | Birden fazla serviste eş zamanlı anomali sinyali |
+
+**Buildup katsayısı:** Her incident öncesi `buildup_days` süresince bu logların üretim olasılığı
+belirlenen katsayı kadar artırılır. Bu sayede model, arıza öncesi uyarı penceresini öğrenir.
+
+### Ham Log Üretimi
+
+`generate_raw_logs()` 8 000 gerçekçi OpenStack log satırı üretir:
+
+```
+Ham Log Dağılımı (son pipeline çalışması):
+  WARNING  : ~2 732 (%34) — erken uyarı sinyalleri
+  ERROR    : ~4 937 (%62) — servis hataları
+  CRITICAL :   ~331 (%4)  — kritik arıza logları
+```
+
+Her log satırı: `timestamp · level · service · message · request_id · duration_ms · instance_id`
+
+---
+
+### 4 Aşamalı Log İşleme Hattı (`log_processor.py`)
+
+```
+Ham Log Özellikleri (saatlik sayımlar, 15 sütun)
+       │
+       ▼
+┌──────────────────────────────────────────────────────────┐
+│  AŞAMA 1 — Ayrıştırma & Sınıflandırma                   │
+│                                                          │
+│  • Servis başına sağlık skoru (Nova, Keystone, vb.)      │
+│  • early_warning_score = Σ(erken uyarı logları) / top.   │
+│  • error_score = Σ(hata logları) / toplam               │
+│  • log_risk_score = 0.6×error + 0.4×warning [0–1]       │
+└────────────────────────────┬─────────────────────────────┘
+                             │
+                             ▼
+┌──────────────────────────────────────────────────────────┐
+│  AŞAMA 2 — Zamansal Agregasyon & Trend                   │
+│                                                          │
+│  • Rolling mean: 6h / 24h / 72h                          │
+│  • Z-skor: her log tipi için (μ=0, σ=1 normalizasyon)    │
+│  • 7 günlük trend yüzdesi (son 7g / önceki 7g)           │
+│  • Anomali tespiti için temel istatistikler              │
+└────────────────────────────┬─────────────────────────────┘
+                             │
+                             ▼
+┌──────────────────────────────────────────────────────────┐
+│  AŞAMA 3 — Anomali Tespiti                               │
+│                                                          │
+│  Z-skor > 2.0 → anomali  (z > 4.0 → yüksek ciddiyet)    │
+│  • anomalies_last_24h: son 24 saatte anomali olan tipler │
+│  • anomalies_last_7d: son 7 gündeki anomali geçmişi      │
+│  • cascade_events: ≥3 log tipi aynı anda anomali         │
+│    → "Cascade Riski" uyarısı üretilir                    │
+└────────────────────────────┬─────────────────────────────┘
+                             │
+                             ▼
+┌──────────────────────────────────────────────────────────┐
+│  AŞAMA 4 — Ön-Arıza Örüntü Çıkarımı                     │
+│                                                          │
+│  Her incident için buildup penceresi analizi:            │
+│  • Referans penceresi: buildup öncesi eş uzunlukta süre  │
+│  • ≥%30 artış → o log tipini "ön-arıza göstergesi" say  │
+│  • lead_time_hours: ilk eşik aşımından incident başına   │
+│  • confidence: gözlem sayısına göre ağırlıklı güven      │
+│                                                          │
+│  Çıktı: prefailure_patterns listesi                      │
+│    [{"log_type", "lead_time_hours", "confidence",        │
+│      "avg_increase_pct", "observed_times"}]              │
+└────────────────────────────┬─────────────────────────────┘
+                             │
+                             ▼
+                    log_insights (dict)
+          ┌─────────────────────────────────┐
+          │ anomalies_last_24h              │
+          │ anomalies_last_7d               │
+          │ cascade_events_recent           │
+          │ prefailure_patterns             │
+          │ log_trends_7d                   │
+          │ service_health                  │
+          │ total_warnings_24h              │
+          │ total_errors_24h                │
+          └─────────────────────────────────┘
+```
+
+### Gerçek Pipeline Sonuçları
+
+```
+Son 24 saat anomali  : 4 tespit  (en yüksek: Kota Aşımı)
+Ön-arıza örüntüsü   : 6 örüntü çıkarıldı (15 incident analiz edildi)
+Cascade uyarısı      : 3 olay   (son: 2026-06-28)
+Erken uyarı log (24s): 1 958 adet
+Hata log (24s)       : 35 adet
+```
 
 ---
 
 ## ⚙️ Özellik Mühendisliği
 
-Ham metrik ve log verileri, `feature_engineering.py` tarafından ~200 sütunlu bir özellik matrisine dönüştürülür:
+Ham metrik ve log verileri, `feature_engineering.py` tarafından ~272 sütunlu bir özellik matrisine dönüştürülür:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │  ÖZELLİK KATEGORİLERİ                              Sütun Sayısı │
 ├─────────────────────────────────────────────────────────────────┤
-│  Ham metrik sütunları (9 sütun)                              9   │
-│  Ham log özellik sütunları                                  18   │
-│  Zaman özellikleri (hour, day, weekend, business_hour…)      7   │
-│  Rolling mean  (3h / 6h / 12h / 24h / 168h) × 9 metrik    45   │
-│  Rolling std   (3h / 6h / 12h / 24h) × 9 metrik           36   │
-│  Lag özellikleri (1h / 6h / 24h / 48h / 168h) × 11 sütun  55   │
-│  Delta / değişim hızı (1h / 6h / 24h) × 6 sütun           18   │
-│  Log rolling mean 6h × 10 sütun                            10   │
-│  Log rolling sum  24h × 10 sütun                           10   │
+│  Ham metrik sütunları (vCPU/Bellek/Disk + diğerleri)        12  │
+│  Ham log özellik sütunları (8 hata + 7 uyarı = 15 tip)      26  │
+│  Zaman özellikleri (hour, day, weekend, business_hour…)       7  │
+│  Rolling mean  (3h/6h/12h/24h/168h) × metrikler            45  │
+│  Rolling std   (3h/6h/12h/24h) × metrikler                 36  │
+│  Lag özellikleri (1h/6h/24h/48h/168h) × sütunlar           55  │
+│  Delta / değişim hızı (1h/6h/24h) × sütunlar               18  │
+│  Log rolling mean 6h × 15 log tipi                          15  │
+│  Log rolling sum 24h × 15 log tipi                          15  │
+│  Delta özellikleri (7 erken uyarı log tipi)                  7  │
+│  early_warning_composite (ağırlıklı uyarı skoru)             1  │
 ├─────────────────────────────────────────────────────────────────┤
-│  TOPLAM                                                   ~208   │
+│  TOPLAM                                                    ~272  │
 └─────────────────────────────────────────────────────────────────┘
 ```
+
+**Temel Metrik Sütunları:**
+`vcpu_usage_percent`, `memory_usage_percent`, `disk_usage_percent`,
+`vcpu_used`, `vcpu_total`, `memory_used_gb`, `memory_total_gb`,
+`disk_used_tb`, `disk_total_tb`, `api_latency_ms`, `error_rate_percent`, `vm_count`
+
+**Log Sayım Sütunları (15 tip):**
+
+- Hata: `nova_api_errors`, `nova_compute_errors`, `nova_scheduler_errors`, `keystone_errors`,
+  `neutron_errors`, `cinder_errors`, `db_connection_count`, `critical_count`
+- Erken Uyarı: `slow_response_count`, `memory_pressure_count`, `connection_pool_warn_count`,
+  `scheduler_degradation_count`, `quota_pressure_count`, `disk_io_degradation_count`, `cascade_indicator_count`
 
 **Neden bu kadar çok özellik?**
 
 - **Rolling:** Anlık değer gürültülüdür. 24 saatlik ortalama, kalıcı yükü temsil eder.
-- **Lag:** Model, "dün bu saatte ne olmuştu?" bilgisine erişerek döngüsel örüntüleri öğrenir.
-- **Delta:** Değişim hızı, buildup dönemini yakalamak için kritiktir. "CPU %60'ta" değil, "CPU saatte +3% artıyor" bilgisi erken uyarıya zemin hazırlar.
-- **Log özellikleri:** Bir kaynak metriği henüz eşiği geçmeden bile log hataları artmış olabilir. Bu iki veri akışının birleştirilmesi sağlık riskini daha erken tespit etmeyi sağlar.
-
-**9 Temel Metrik Sütunu:**
-`cpu_usage_percent`, `memory_usage_percent`, `disk_usage_percent`, `api_latency_ms`, `error_rate_percent`, `network_in_mbps`, `network_out_mbps`, `api_requests_per_hour`, `vm_count`
-
-**10 Log Sayım Sütunu:**
-`total_errors`, `critical_count`, `timeout_count`, `db_connection_count`, `resource_exhausted_count`, `quota_exceeded_count`, `auth_failure_count`, `network_error_count`, `scheduler_error_count`, `io_error_count`
+- **Lag:** Model "dün bu saatte ne olmuştu?" bilgisiyle döngüsel örüntüleri öğrenir.
+- **Delta:** Değişim hızı, buildup dönemini yakalamak için kritiktir.
+- **Erken uyarı logları:** Metrikler henüz eşiği geçmeden loglar yükselmiş olabilir.
+- **early_warning_composite:** 7 erken uyarı tipinin ağırlıklı ortalaması — tek bir proaktif risk skoru.
 
 ---
 
@@ -381,7 +455,7 @@ ML modelleriyle analiz ederek **eşiğe kaç gün kaldığını** önceden hesap
 ```
 3 Kaynak × 3 Zaman Ufku × 3 Model = 27 Model
 ───────────────────────────────────────────────
-Kaynak   : CPU · Bellek · Disk
+Kaynak   : vCPU · Bellek · Disk  (vcpu_usage_percent, memory_usage_percent, disk_usage_percent)
 Ufuk     : 24 saat · 72 saat · 168 saat (1 hafta)
 Model    : Linear Regression · Random Forest · Gradient Boosting
 Seçim    : Her kaynak–ufuk çifti için en düşük RMSE
@@ -397,10 +471,8 @@ Seçim    : Her kaynak–ufuk çifti için en düşük RMSE
 
 ### Eşiğe Kaç Gün Kaldığı — ML Tabanlı İteratif Tahmin
 
-Her kaynak için **eğitilen en iyi ML modeli** (en düşük RMSE'li) kullanılarak iteratif ileriye dönük tahmin yapılır. Eski medyan-slope ekstrapolasyonu tamamen kaldırılmıştır.
-
 ```
-1. Capacity_results'tan 24s ufkunda en iyi model seçilir (LR / RF / GBT)
+1. capacity_results'tan 24s ufkunda en iyi model seçilir (LR / RF / GBT)
        ↓
 2. Son feature satırından başlanır (lag, rolling, delta, zaman özellikleri)
        ↓
@@ -413,136 +485,20 @@ Her kaynak için **eğitilen en iyi ML modeli** (en düşük RMSE'li) kullanıla
    Değilse → adım tekrar (maks 2 yıl / 730 adım)
 ```
 
-**Örnek akış (Disk, Random Forest seçildi):**
+**Gerçek pipeline çıktısı:**
 ```
-t=0:   Disk=%68  → RF tahmin → t+24h: %68.3
-t=1:   Disk=%68.3 → RF tahmin → t+24h: %68.6
-...
-t=93:  Disk=%82.1 → eşik aşıldı → "~93 gün sonra dolacak"
+vCPU  : %79.6 → Eşik %90.0 | +0.275%/gün | Tahmini eşik: 2026-09-12 (~74 gün)
+Bellek: %85.5 → Eşik %88.0 | +0.151%/gün | Tahmini eşik: 2026-08-15 (~46 gün)
 ```
-
-Her adımda güncellenen özellikler:
-- `disk_usage_percent_lag_{1,6,24,48,168}h`
-- `disk_usage_percent_rmean_{3,6,12,24,168}h`
-- `disk_usage_percent_rstd_{3,6,12,24}h`
-- `disk_usage_percent_delta_{1,6,24}h`
-- `hour_of_day`, `day_of_week`, `is_weekend`, `is_business_hour`
-
-> **Model yoksa:** Fallback olarak son 30 günün medyan günlük değişimi (Theil-Sen benzeri) kullanılır.
 
 ### Değerlendirme Metrikleri
 
 | Metrik | Formül | Yorumu |
 |---|---|---|
-| **MAE** | `mean(|gerçek - tahmin|)` | Puan bazlı ortalama hata; düşük = iyi |
-| **RMSE** | `sqrt(mean((gerçek - tahmin)²))` | Büyük sapmaları cezalandırır; **model seçim kriteri** |
+| **MAE** | `mean(|gerçek - tahmin|)` | Puan bazlı ortalama hata |
+| **RMSE** | `sqrt(mean((gerçek - tahmin)²))` | **Model seçim kriteri** — büyük sapmaları cezalandırır |
 | **R²** | `1 - SS_res/SS_tot` | 1=mükemmel, 0=ortalama kadar iyi, negatif=kötü |
-| **MAPE** | `mean(|gerçek - tahmin| / gerçek) × 100` | Yüzde bazlı hata; düşük değerler iyi |
-
-> **Disk R² neden negatif?**
-> Disk kullanımı monoton artar ve test dönemindeki ani artışlar (staj yükü) eğitim setinde
-> görülmemiştir. Bu durumlarda lineer ekstrapolasyon tamamlayıcı yöntem olarak kullanılır.
-
-### Üretilen Görselleştirmeler (Kapasite Tahmini)
-
-| Grafik | Dosya | Açıklama |
-|---|---|---|
-| Tahmin vs Gerçek | `capacity_forecasts.png` | Her kaynak için zaman serisi karşılaştırması |
-| Model RMSE Kıyası | `capacity_model_comparison.png` | 3 model × 3 kaynak bar grafiği |
-| **Hata Dağılımı** | `capacity_residuals.png` | Gerçek − Tahmin histogramı; sıfır etrafında simetrik dağılım iyi kalibrasyonu gösterir |
-
----
-
-## 🩺 Sağlık Riski Sınıflandırması
-
-### Temel Soru
-
-> *"Sonraki 4 saatte sistem kritik bir eşiği aşacak mı?"*
-
-Bu soru, anlık metrik değeriyle değil; **saatler öncesinden başlayan buildup sinyalleriyle** yanıtlanır.
-
-### Risk Etiketi Nasıl Oluşturulur?
-
-```python
-# Sonraki 4 saatlik pencere içinde şu koşullardan herhangi biri sağlanırsa → Risk = 1
-
-risk = 1  eğer:
-    CPU > 85%        VEYA
-    Bellek > 88%     VEYA
-    Hata Oranı > 5%  VEYA
-    API Gecikmesi > 1200 ms
-
-# Bu koşulların hiçbiri sağlanmıyorsa → Risk = 0 (Güvenli)
-```
-
-### Sınıf Dengesizliği
-
-Gerçek sistemlerde kritik olaylar nadirdir (~%12 oranında). Bu dengesizlik
-`class_weight='balanced'` parametresiyle giderilir: azınlık sınıfı (risk=1) eğitimde
-daha fazla ağırlık alır.
-
-### Model Değerlendirme Metrikleri
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                     SINIFLANDIRMA METRİKLERİ                    │
-├──────────────────┬──────────────────────────────────────────────┤
-│  Accuracy        │  Tüm tahminlerin doğruluk oranı              │
-│                  │  Dengesiz veri setinde yanıltıcı olabilir    │
-├──────────────────┼──────────────────────────────────────────────┤
-│  Precision       │  "Riskli" dediğimizde ne kadar haklıyız?     │
-│                  │  Yanlış alarm sayısını minimize eder          │
-├──────────────────┼──────────────────────────────────────────────┤
-│  Recall          │  Gerçek risklerin kaçını yakaladık?          │
-│                  │  Kaçan incident sayısını minimize eder        │
-├──────────────────┼──────────────────────────────────────────────┤
-│  F1 Skoru ★      │  Precision × Recall dengesi                 │
-│                  │  Dengesiz veri setinde birincil seçim kriteri │
-├──────────────────┼──────────────────────────────────────────────┤
-│  AUC-ROC         │  Tüm karar eşiklerinde ayrıştırma gücü      │
-│                  │  1.0 = mükemmel, 0.5 = rastgele             │
-└──────────────────┴──────────────────────────────────────────────┘
-```
-
-**Neden F1 ile seçim?**
-
-Operasyonel bağlamda iki hata tipi vardır:
-- **False Positive (yanlış alarm):** Operatör gereksiz yere müdahale eder → zaman kaybı
-- **False Negative (kaçan risk):** Olay önlenemez → sistem çöküşü
-
-F1 skoru bu iki hatayı dengeler. Kritik altyapıda kaçan bir incident,
-yanlış alarmdan çok daha maliyetlidir — bu nedenle Recall'un ağırlığı yüksek tutulmalıdır.
-
-### Üretilen Görselleştirmeler (Sağlık Modeli)
-
-| Grafik | Dosya | Açıklama |
-|---|---|---|
-| ROC Eğrileri | `health_roc_curves.png` | 3 modelin FPR-TPR eğrisi; sol-yukarı = daha iyi |
-| Karmaşıklık Matrisleri | `health_confusion_matrices.png` | Gerçek vs tahmin sınıf dağılımı |
-| Risk Zaman Çizelgesi | `health_risk_timeline.png` | Test döneminde anlık risk olasılığı vs gerçek etiket |
-| **Reliability Diagram** | `health_calibration.png` | Tahmin edilen olasılık vs gerçek pozitif oranı — olasılık kalibrasyonu |
-
-**Reliability Diagram neden önemlidir?**
-
-Model "%80 riskli" dediğinde gerçekten her 10 vakadan 8'inde mi risk oluşuyor? Kalibrasyon eğrisi bunu gösterir. Diyagonale yakın model → güvenilir olasılık çıktısı → operatör eşik ayarını doğru yapabilir.
-
-### Proaktif İzlemenin Kanıtı
-
-İyi kalibre edilmiş bir model, **risk olasılığını incident başlamadan birkaç saat önce yükseltir**:
-
-```
-Risk Olasılığı
-     1.0 │                    ████
-     0.8 │               ████████████
-     0.6 │          ██████████████████
-     0.4 │       ████████████████████████
-     0.2 │  ██████████████████████████████████
-     0.0 └────────────────────────────────────► Zaman
-              ↑                    ↑
-         Buildup başlar       Gerçek incident
-         [ML burada uyarır]   [Alarm burada çalar]
-              ←── proaktif pencere ──→
-```
+| **MAPE** | `mean(|gerçek - tahmin| / gerçek) × 100` | Yüzde bazlı hata |
 
 ---
 
@@ -550,136 +506,91 @@ Risk Olasılığı
 
 ### Neden Açıklanabilirlik Gereklidir?
 
-Makine öğrenmesi modeli "riskli" der — ama *neden?* Bu soruyu yanıtlamadan
-operatör doğru aksiyonu alamaz. SHAP, her tahminin arkasındaki özellik katkılarını
-matematiksel olarak hesaplar.
-
-### SHAP Nasıl Çalışır?
+Makine öğrenmesi modeli "kapasite riski var" der — ama *neden?* SHAP her tahminin arkasındaki
+özellik katkılarını matematiksel olarak hesaplar:
 
 ```
 Tahmin = beklenti_değeri + Σ (her özelliğin SHAP katkısı)
 
 Örnek:
-  Model "risk=0.85" diyor.
-  Beklenti: 0.12  (ortalama risk oranı)
+  vCPU 24h tahmini: %82.3
+  Beklenti: %72.1
 
   SHAP katkıları:
-  + error_rate_percent_rmean_6h  : +0.31  (artan hata oranı riski yükseltiyor)
-  + timeout_count_rmean_6h       : +0.22  (timeout artışı riski yükseltiyor)
-  + cpu_usage_percent_lag_1h     : +0.14  (önceki CPU yüksekliği)
-  + api_latency_ms_delta_24h     : +0.06  (gecikme artış hızı)
-  ─────────────────────────────────────────
-  = 0.12 + 0.31 + 0.22 + 0.14 + 0.06 + ... = 0.85 ✓
+  + vm_count_rmean_24h      : +6.8  (VM sayısı büyümesi baskıyı yönetiyor)
+  + vcpu_usage_percent_lag_1h: +2.4  (bir önceki saatin değeri)
+  + error_rate_lag_24h       : +0.9  (hata oranı artışı)
+  ...
+  = 72.1 + 6.8 + 2.4 + 0.9 + ... = 82.3 ✓
 ```
 
-### Explainer Seçimi: Model Tipine Göre
-
-CloudMon tüm modelleri SHAP ile analiz eder — Linear Regression dahil:
+### Explainer Seçimi
 
 | Model | SHAP Explainer | Açıklama |
 |---|---|---|
 | **Random Forest** | `shap.TreeExplainer` | Model-içi verimli hesaplama; ağaç yollarından türetilir |
 | **Gradient Boosting** | `shap.TreeExplainer` | Aynı şekilde; her boosting adımının katkısı ayrıştırılır |
-| **Linear Regression** | `shap.LinearExplainer` | Eğitim setinden 200 örneklik arka plan (masker); doğrusal katsayı × özellik değeri |
+| **Linear Regression** | `shap.LinearExplainer` | 200 örneklik arka plan maskesi; katsayı × özellik değeri |
 
-```python
-# Ağaç modeller
-explainer = shap.TreeExplainer(model)
+### Gerçek SHAP Bulguları (Pipeline Çıktısı)
 
-# Doğrusal modeller
-background = shap.maskers.Independent(X_train_sample, max_samples=200)
-explainer  = shap.LinearExplainer(model, background)
-```
-
-Test setinden 500 örneklem üzerinde çalışır; tüm 9 kaynak × ufuk × model kombinasyonu için SHAP değerleri üretilir (önceden yalnızca ağaç modellerine sınırlıydı).
+| Kaynak–Ufuk | En İyi Model | Top SHAP Özelliği | Yorumu |
+|---|---|---|---|
+| vCPU 24h | Linear Regression | `vm_count_rmean_24h` | VM sayısı büyümesi vCPU baskısını yönetiyor |
+| vCPU 72h | Linear Regression | `vm_count_rmean_24h` | Orta vadede de VM yoğunluğu belirleyici |
+| vCPU 168h | Random Forest | `vm_count_rmean_6h` | Kısa vadeli VM momenti uzun vade tahminini etkiliyor |
+| Bellek 24h | Linear Regression | `vm_count_rmean_24h` | Bellek ve vCPU büyümesi yüksek korelasyon |
+| Bellek 72h | Linear Regression | `total_errors_rsum_72h` | Hata birikimi orta vadeli bellek baskısını öngörüyor |
+| Disk 24h | Linear Regression | `total_errors_rsum_24h` | Disk I/O hataları disk kullanımını öngörüyor |
+| Disk 72h | Linear Regression | `connection_pool_warn_count_rsum_72h` | Bağlantı uyarıları disk baskısına öncü sinyal |
 
 ### Üretilen Görselleştirmeler
 
-```
-Her model için 3 grafik üretilir:
-┌──────────────────────┬──────────────────────────┬──────────────────────┐
-│     BAR PLOT         │       BEESWARM           │    DEPENDENCE        │
-│                      │                          │                      │
-│  Top 20 özelliğin    │  Her nokta = 1 test      │  En etkili 2         │
-│  ortalama |SHAP|     │  örneği                  │  özellik için        │
-│  değeri              │  Kırmızı = yüksek değer  │  scatter grafiği     │
-│                      │  Mavi = düşük değer      │  X = özellik değeri  │
-│  Hangi özellik       │  Sağ = tahmin artar       │  Y = SHAP katkısı    │
-│  genel olarak        │  Sol = tahmin azalır      │                      │
-│  önemli?             │                          │  İlişki doğrusal mı? │
-│                      │  Değer ve etki           │  Eşik var mı?        │
-│                      │  nasıl ilişkili?         │                      │
-└──────────────────────┴──────────────────────────┴──────────────────────┘
-```
-
-### Öneri Motoruna Katkısı
-
-SHAP analizi doğrudan öneri kalitesini artırır:
-
-```
-❌ Eski yaklaşım:
-   "Disk kapasitesi kritik. Disk genişletin."
-
-✓ SHAP destekli öneri:
-   "Disk kapasitesi kritik.
-    En etkili özellik (SHAP): 'disk_usage_percent_rmean_168h' (+0.41)
-    Öneri: Haftalık ortalama disk artış hızını izleyin.
-    Aksiyonlar: 1) Snapshot'ları temizle 2) Volume quota gözden geçir
-                3) Ek depolama planlamasını başlatın"
-```
+Her model için 3 grafik:
+- **Bar:** Top 20 özelliğin ortalama |SHAP| değeri — hangi özellik genel olarak önemli?
+- **Beeswarm:** Her nokta = 1 test örneği — değer ve etki nasıl ilişkili?
+- **Dependence:** En etkili özellik için scatter — ilişki doğrusal mı, eşik var mı?
 
 ---
 
 ## 💡 Öneri Motoru
 
-### Üç Öneri Kanalı
+### Dört Öneri Kanalı
 
 ```
-┌────────────────────────────────────────────────────────────────────┐
-│                       ÖNERİ KANALLARI                              │
-├───────────────────────┬───────────────────────┬────────────────────┤
-│  KAPASİTE TRENDİ      │  SAĞLIK RİSKİ         │  TREND BOZULMASI   │
-│                       │                       │                    │
-│  Son 72s verisiyle    │  Son 48s penceresi    │  Son 7 gün vs      │
-│  lineer ekstrapolasyon│  ortalama risk         │  önceki 7 gün      │
-│                       │  olasılığı            │  karşılaştırması   │
-│  Kritik: ≤7 gün       │                       │                    │
-│  (Disk: ≤10 gün)      │  Kritik: ≥ 0.80       │  Hata Oranı:       │
-│                       │  Uyarı:  ≥ 0.65       │  +1.5% → Kritik    │
-│  Uyarı: ≤14 gün       │                       │  +0.5% → Uyarı     │
-│  (Disk: ≤21 gün)      │                       │                    │
-│                       │                       │  API Gecikmesi:    │
-│                       │                       │  +150ms → Kritik   │
-│                       │                       │  +50ms → Uyarı     │
-└───────────────────────┴───────────────────────┴────────────────────┘
+┌─────────────────┬─────────────────┬──────────────────┬─────────────────┐
+│  KAPASİTE       │  LOG ANOMALİSİ  │  ÖN-ARIZA        │  CASCADE        │
+│  TRENDİ         │                 │  ÖRÜNTÜSÜ        │  RİSKİ          │
+│                 │                 │                  │                 │
+│  Son 72s verisi │  Z-skor bazlı   │  Güven ≥%50      │  ≥3 log tipi    │
+│  → eşiğe gün   │  z≥4 → Kritik   │  Öncü süre ile   │  aynı anda      │
+│                 │  2≤z<4 → Uyarı  │  uyarı           │  anomali        │
+│  Kritik: ≤7 gün │                 │                  │                 │
+│  Uyarı: ≤14 gün│                 │                  │                 │
+└─────────────────┴─────────────────┴──────────────────┴─────────────────┘
 ```
 
 ### Öneri Öncelik Sistemi
 
 ```
-🔴 KRİTİK  →  Acil müdahale gerektirir (eşiğe <1 hafta, risk > 0.80)
-🟡 UYARI   →  Planlı aksiyonlar alınmalı (eşiğe 1-2 hafta)
-🔵 BİLGİ   →  İzlemeye devam, trend gözleniyor
+🔴 KRİTİK  →  Acil müdahale (eşiğe <1 hafta, z-skor >4.0, cascade)
+🟡 UYARI   →  Planlı aksiyonlar (eşiğe 1-2 hafta, z-skor 2-4, güven ≥50%)
+🔵 BİLGİ   →  İzlemeye devam
 ```
 
-### Öneri Yapısı
-
-Her öneri şu bilgileri içerir:
+### Örnek Log Anomali Önerisi
 
 ```json
 {
   "severity": "critical",
-  "category": "KAPASİTE",
-  "title": "Disk Kapasitesi Kritik Seviyeye Yaklaşıyor",
-  "detail": "Mevcut trend devam ederse disk 8 gün içinde %82 eşiğini aşacak.",
+  "category": "LOG ANOMALİSİ",
+  "title": "Kota Aşımı Log Anomalisi Tespit Edildi",
+  "detail": "quota_pressure_count son 24 saatte anormal yükseldi (z-skor: 4.5).",
   "actions": [
-    "Kullanılmayan snapshot ve volume'ları temizle",
-    "Volume quota politikalarını gözden geçir",
-    "Depolama genişleme planlamasını başlat"
-  ],
-  "shap_feature": "disk_usage_percent_rmean_168h",
-  "estimated_date": "2026-07-19",
-  "timestamp": "2026-07-11T14:30:00"
+    "Nova quota limitlerini kontrol edin",
+    "Staj dönemi kaynak tahsisini gözden geçirin",
+    "Kota uyarı eşiklerini düşürün"
+  ]
 }
 ```
 
@@ -687,14 +598,11 @@ Her öneri şu bilgileri içerir:
 
 ## 🤖 LLM Entegrasyonu
 
-### Yaklaşım
-
-Kural tabanlı öneri motorunun ürettiği yapılandırılmış çıktı, gerçek zamanlı sistem
-metriğiyle birleştirilerek iki büyük dil modeline aynı anda gönderilir:
+### Çift LLM Yaklaşımı
 
 ```
-Sistem bağlamı
-(metrik özeti + SHAP + kapasite tarihleri + staj durumu + hata karşılaştırması)
+Zenginleştirilmiş Bağlam
+(metrik + log içgörüleri + SHAP + kapasite tarihleri + staj durumu)
           │
           ├──► Claude Sonnet (Anthropic)  →  Yanıt A
           │
@@ -707,51 +615,67 @@ Yanıtlar yan yana karşılaştırılır
 
 | Bağlam Kategorisi | İçerik |
 |---|---|
-| **Metrik özeti** | Son 24s CPU/Bellek/Disk/Gecikme/Hata ortalaması ve maksimumu |
-| **Kapasite bitiş tarihleri** | Her kaynak için tahmini dolum tarihi ve günlük trend |
-| **Staj durumu** | Aktif/yaklaşan staj dönemi, beklenen VM artışı |
-| **7 günlük hata karşılaştırması** | Her hata tipi için son 7g vs önceki 7g |
-| **SHAP top özellikleri** | Sağlık riski modelinin en etkili 8 özelliği |
+| **Metrik özeti (mutlak)** | `vcpu_used/vcpu_total`, `memory_used_gb/memory_total_gb`, `disk_used_tb/disk_total_tb` |
+| **Kapasite bitiş tarihleri** | Her kaynak için ML tahmini + günlük trend |
+| **Log anomalileri (24s)** | Anomali olan log tipleri, z-skor, oran |
+| **7 günlük log trendi** | Her log tipi için son 7g vs önceki 7g karşılaştırması |
+| **Ön-arıza örüntüleri** | Historik incident'larda hangi log tipleri önceden artmış, güven skoru, öncü süre |
+| **Cascade riski** | Eş zamanlı çoklu anomali olayları ve zamanları |
+| **Servis sağlık durumu** | Nova / Keystone / Neutron / Cinder sağlık skoru |
+| **Staj durumu** | Aktif/yaklaşan staj dönemi ve beklenen yük artışı |
+| **SHAP top özellikleri** | Her kaynak için top-5 SHAP özelliği ve katkısı |
 | **Kural motoru önerileri** | Otomatik üretilen kritik/uyarı önerileri |
 
-### LLM Görev Yapısı
+### LLM Prompt Yapısı (Özet)
 
-LLM'den 5 konuda yanıt istenir:
-1. **Kapasite Planlaması** — Aciliyet sıralı kaynak genişletme önerileri
-2. **Staj Hazırlığı** — Kota, zamanlayıcı ve alarm eşiği ayarları
-3. **Hata Trend Analizi** — Spesifik OpenStack komutları
-4. **İzleme Öncelikleri** — Önümüzdeki 7 günün 3 kritik metriği
-5. **Sistem İçgörüsü** — Tekrarlayan örüntü analizi
+```
+SİSTEM DURUMU: vCPU 1592/2000 (%79.6) · Bellek 6841/8000 GB (%85.5) · Disk 400/500 TB (%80.1)
+
+LOG ANALİZİ — SON 24 SAAT ANOMALİLER:
+  • quota_pressure_count: z-skor=4.50 [YÜKSEK CİDDİYET]
+
+TARİHSEL ÖN-ARIZA ÖRÜNTÜLERİ (15 incident analizi):
+  • cascade_indicator: güven=%92, öncü süre=18s, ort. artış=%245
+  • memory_pressure: güven=%85, öncü süre=12s, ort. artış=%178
+
+CASCADE RİSKİ: 3 cascade olayı tespit edildi (son: 2026-06-28 08:00)
+
+SERVİS SAĞLIK DURUMU:
+  nova: degraded | keystone: warning | neutron: healthy | cinder: healthy
+
+GÖREV: Proaktif operasyonel öneriler üret (kapasite planlaması, staj hazırlığı,
+        hata trend analizi, izleme öncelikleri, sistem içgörüsü)
+```
 
 ---
 
 ## 📊 Model Performans Sonuçları
 
-### Kapasite Tahmini (Gerçek Sonuçlar)
+### Kapasite Tahmini (Gerçek Sonuçlar — 272 özellik, 13 104 satır)
 
 | Kaynak | Ufuk | En İyi Model | MAE | RMSE | R² |
 |---|---|---|---|---|---|
-| CPU | 24 saat | Random Forest | 4.53 | 6.79 | 0.7924 |
-| CPU | 72 saat | Linear Regression | 6.47 | 9.10 | 0.6277 |
-| CPU | 168 saat | Gradient Boosting | 7.33 | 10.78 | 0.4752 |
-| Bellek | 24 saat | Linear Regression | 2.41 | 3.47 | 0.8146 |
-| Bellek | 72 saat | Linear Regression | 3.70 | 5.86 | 0.4684 |
-| Bellek | 168 saat | Linear Regression | 5.14 | 8.01 | -0.016 |
-| Disk | 24 saat | Linear Regression | 1.71 | 3.19 | 0.5722 |
-| Disk | 72 saat | Linear Regression | 2.90 | 4.89 | -0.027 |
-| Disk | 168 saat | Linear Regression | 3.76 | 5.81 | -0.559 |
+| vCPU | 24 saat | **Linear Regression** | 0.92 | 1.31 | 0.9577 |
+| vCPU | 72 saat | **Linear Regression** | 1.88 | 2.99 | 0.7756 |
+| vCPU | 168 saat | **Random Forest** | 7.89 | 9.99 | -1.670 |
+| Bellek | 24 saat | **Linear Regression** | 2.15 | 3.44 | 0.7959 |
+| Bellek | 72 saat | **Linear Regression** | 4.45 | 6.06 | 0.3454 |
+| Bellek | 168 saat | **Random Forest** | 10.66 | 12.45 | -1.982 |
+| Disk | 24 saat | **Linear Regression** | 1.69 | 2.82 | 0.7010 |
+| Disk | 72 saat | **Linear Regression** | 5.45 | 9.32 | -2.398 |
+| Disk | 168 saat | **Linear Regression** | 6.08 | 8.07 | -1.785 |
 
-> MAE ve RMSE birimleri yüzde puanı (%). Disk için negatif R²: monoton artış + test dönemindeki staj spike'ları eğitim setinde görülmemiş.
+> MAE ve RMSE birimleri yüzde puanı (%). 24h ufkunda Linear Regression dominant:
+> iki fazlı büyüme modeli lineer trendi çok iyi yakalamaktadır (vCPU 24h R²=0.96).
+> 72h+ ufuklarda negatif R²: staj dönemlerindeki ani sıçramalar eğitim setinden test setine genellenemiyor.
 
-### Sağlık Riski Sınıflandırması (Gerçek Sonuçlar)
+### Eşik Tarihi İçin Seçilen ML Modelleri (24h RMSE bazlı)
 
-| Model | Accuracy | Precision | Recall | F1 | AUC-ROC |
-|---|---|---|---|---|---|
-| Logistic Regression | 0.984 | 1.000 | 0.925 | 0.961 | 1.000 |
-| Random Forest | 0.986 | 0.993 | 0.944 | 0.968 | 1.000 |
-| **Gradient Boosting ★** | **0.999** | **0.994** | **1.000** | **0.997** | **1.000** |
-
-> ★ En iyi model (F1 bazlı). AUC=1.0: risk etiketi doğrudan metriklerden türetildiğinden modeller bu sinyalleri mükemmel öğreniyor — sentetik veri avantajı.
+| Kaynak | Model | SHAP Explainer |
+|---|---|---|
+| vCPU | Linear Regression | `shap.LinearExplainer` + iteratif tahmin |
+| Bellek | Linear Regression | `shap.LinearExplainer` + iteratif tahmin |
+| Disk | Linear Regression | `shap.LinearExplainer` + iteratif tahmin |
 
 ---
 
@@ -761,57 +685,64 @@ LLM'den 5 konuda yanıt istenir:
 cloudmon/
 ├── config.py                              # Merkezi yapılandırma
 │   ├── Zaman aralığı + SEED
+│   ├── Kapasite senaryosu
+│   │   ├── VCPU_TOTAL=2000, VCPU_START=30, VCPU_END=1598
+│   │   ├── MEMORY_TOTAL_GB=8000, MEMORY_START_GB=2450, MEMORY_END_GB=6720
+│   │   └── DISK_TOTAL_TB=500, DISK_START_TB=140, DISK_END_TB=390
 │   ├── Kritik eşik değerleri (THRESHOLDS)
 │   ├── FORECAST_HORIZONS = [24, 72, 168]
-│   ├── STAJ_PERIODS (4 dönem)
-│   ├── CAPACITY_EXPANSIONS (3 genişleme)
-│   └── INCIDENTS (15 olay)
+│   ├── CAPACITY_TARGETS = [vcpu_usage_percent, memory_usage_percent, disk_usage_percent]
+│   ├── STAJ_PERIODS (4 dönem, vcpu_extra/disk_extra dahil)
+│   └── INCIDENTS (15 olay, vcpu_spike/memory_spike/disk_spike)
 │
 ├── main.py                                # Pipeline giriş noktası (6 adım)
-├── dashboard.py                           # Streamlit arayüzü (7 sayfa)
+├── dashboard.py                           # Streamlit arayüzü
 │
 ├── src/
 │   ├── data_generation/
-│   │   ├── metrics_generator.py           # Saatlik metrik üretimi
-│   │   └── log_generator.py              # Log özellik üretimi + ham log örnekleri
+│   │   ├── metrics_generator.py           # İki fazlı büyüme + vCPU/Bellek/Disk mutlak değerleri
+│   │   ├── log_generator.py              # 15 log tipi (8 hata + 7 erken uyarı) + 8000 ham log
+│   │   └── log_processor.py             # 4 aşamalı log işleme hattı [YENİ]
 │   │
 │   ├── preprocessing/
-│   │   └── feature_engineering.py        # Rolling/lag/delta/zaman/log özellikleri
+│   │   └── feature_engineering.py        # 272 sütun + early_warning_composite
 │   │
 │   ├── models/
-│   │   ├── capacity_predictor.py         # 27 regresyon modeli
-│   │   └── health_classifier.py          # 3 binary sınıflandırıcı
+│   │   └── capacity_predictor.py         # 27 regresyon modeli (vCPU/Bellek/Disk)
 │   │
 │   ├── explainability/
-│   │   └── shap_explainer.py             # TreeExplainer + görselleştirme
+│   │   └── shap_explainer.py             # TreeExplainer + LinearExplainer + görselleştirme
 │   │
 │   └── recommendations/
-│       ├── engine.py                     # Kural bazlı öneri motoru
-│       └── llm_advisor.py               # Claude + GPT-4o entegrasyonu
+│       ├── engine.py                     # Kapasite + Log Anomali + Cascade + Ön-Arıza önerileri
+│       └── llm_advisor.py               # Claude + GPT-4o (metrik + log içgörüleri birleşik prompt)
 │
 ├── data/
-│   ├── raw/                              # Ham CSV dosyaları (metrics, logs, raw_logs)
+│   ├── raw/
+│   │   ├── metrics.csv                   # 13 104 satır × vCPU/Bellek/Disk mutlak + yüzde + diğerleri
+│   │   ├── log_features.csv              # 13 104 satır × 15 log tipi saatlik sayımı
+│   │   └── raw_logs.csv                  # 8 000 ham OpenStack log satırı
 │   └── processed/
-│       ├── features.csv                  # ~13 140 × 132 özellik matrisi
-│       └── models/                       # Eğitilmiş .pkl modeller (27 kapasite + 3 sağlık)
+│       ├── features.csv                  # 13 104 × 272 özellik matrisi
+│       └── models/                       # 27 kapasite modeli (.pkl)
 │
 └── results/
-    ├── figures/                          # 30+ PNG grafik
-    │   ├── metrics_overview.png
-    │   ├── log_analysis.png
-    │   ├── capacity_forecasts.png
-    │   ├── capacity_model_comparison.png
-    │   ├── health_roc_curves.png
-    │   ├── health_confusion_matrices.png
-    │   ├── health_risk_timeline.png
-    │   └── shap_*.png (27 SHAP grafiği)
+    ├── figures/
+    │   ├── metrics_overview.png           # vCPU/Bellek/Disk mutlak değer trendi + projeksiyon
+    │   ├── log_analysis.png               # 15 log tipinin zaman serisi
+    │   ├── log_pipeline_analysis.png      # 4 panel: risk skoru · z-skor · ön-arıza · 7g trend
+    │   ├── capacity_forecasts.png         # Tahmin vs gerçek karşılaştırması
+    │   ├── capacity_model_comparison.png  # 3 model × 3 kaynak bar grafiği
+    │   ├── capacity_residuals.png         # Hata dağılımı histogramları
+    │   └── shap_*.png                     # 27 SHAP grafiği (bar + beeswarm + dep)
     │
-    └── reports/                          # JSON ve TXT raporlar
-        ├── capacity_results.json
-        ├── health_results.json
-        ├── recommendations.json
-        ├── recommendations.txt
-        └── shap_*.csv (9 SHAP tablosu)
+    └── reports/
+        ├── capacity_results.json          # 27 modelin MAE/RMSE/R² sonuçları
+        ├── recommendations.json           # Kural motoru önerileri
+        ├── recommendations.txt            # İnsan okunabilir özet
+        ├── llm_recommendations.json       # Claude + GPT-4o yanıtları
+        ├── llm_recommendations.txt        # İnsan okunabilir LLM raporu
+        └── shap_*.csv                     # 9 SHAP özellik önem tablosu
 ```
 
 ---
@@ -827,11 +758,8 @@ Python 3.10+
 ### Kurulum
 
 ```bash
-# Sanal ortam (önerilen)
 python3 -m venv venv
 source venv/bin/activate   # Windows: venv\Scripts\activate
-
-# Bağımlılıklar
 pip install -r requirements.txt
 ```
 
@@ -841,66 +769,65 @@ pip install -r requirements.txt
 python main.py
 ```
 
-Pipeline yaklaşık **10–15 dakika** sürer. Çıktılar `results/` dizinine yazılır.
+Pipeline yaklaşık **60–90 dakika** sürer (model eğitimi ağırlıklı). Çıktılar `results/` dizinine yazılır.
 
 **Pipeline çıktısı:**
 ```
-════════════════════════════════════════════════════
-  BULUT ALT YAPI PROAKTİF İZLEME & KARAR DESTEK
-  OpenStack | Prometheus + OpenSearch | ML Pipeline
-════════════════════════════════════════════════════
+══════════════════════════════════════════════════════════════
+  BULUT ALTYAPI PROAKTİF İZLEME & KARAR DESTEK SİSTEMİ
+  OpenStack | vCPU: 30 → 1598/2000 | Log Pipeline + LLM
+══════════════════════════════════════════════════════════════
 
 ── ADIM 1 / 6  →  Sentetik Veri Üretimi
-── ADIM 2 / 6  →  Özellik Mühendisliği
-── ADIM 3 / 6  →  Kapasite Tahmin Modelleri (Regresyon)
-── ADIM 4 / 6  →  Sağlık Riski Sınıflandırması (Binary)
+   vCPU: 43 → 1592/2000 (%79.6) · Bellek: 2551 → 6841/8000 GB · Disk: 139 → 400/500 TB
+   Ham log: 8000 (WARNING: 2732  ERROR: 4937  CRITICAL: 331)
+
+── ADIM 2 / 6  →  Log İşleme Hattı (4 Aşamalı Analiz)
+   Anomali: 4 (son 24s) · Ön-arıza örüntüsü: 6 · Cascade: 3 olay
+
+── ADIM 3 / 6  →  Özellik Mühendisliği  (13 104 × 272)
+
+── ADIM 4 / 6  →  Kapasite Tahmin Modelleri
+   [vCPU | 24s | Linear Regression]  R²=0.9577
+
 ── ADIM 5 / 6  →  SHAP Açıklanabilirlik Analizi
-── ADIM 6 / 6  →  Operasyonel Öneri Üretimi
+
+── ADIM 6 / 6  →  Proaktif Öneri Üretimi (Kural + LLM)
 ```
+
+### LLM Entegrasyonu (İsteğe Bağlı)
+
+```bash
+export ANTHROPIC_API_KEY="sk-ant-..."
+export OPENAI_API_KEY="sk-..."
+```
+
+API anahtarı varsa ADIM 6'da otomatik olarak LLM çağrısı yapılır ve
+`results/reports/llm_recommendations.{json,txt}` dosyalarına kaydedilir.
 
 ### Streamlit Dashboard
 
 ```bash
-source venv/bin/activate
 python3 -m streamlit run dashboard.py --server.port 8501
 ```
 
 Tarayıcıda `http://localhost:8501` adresini açın.
 
-**Dashboard Sayfaları:**
-- 🏠 Ana Sayfa — Canlı metrik kartları + sistem hakkında detaylar
-- 📊 Veri Genel Görünüm — Metrik zaman serileri ve log analizi
-- 📈 Kapasite Tahmini — 27 modelin performans karşılaştırması
-- 🩺 Sağlık Sınıflandırması — ROC eğrileri, confusion matrix, risk zaman çizelgesi
-- 🔍 SHAP Açıklanabilirlik — Bar, Beeswarm ve Dependence grafikleri
-- 💡 Operasyonel Öneriler — Önceliklendirilmiş aksiyon kartları
-- 🤖 LLM Öneri Karşılaştırması — Claude vs GPT-4o yan yana analiz
-
-### LLM Entegrasyonu (İsteğe Bağlı)
-
-```bash
-# Anthropic (Claude)
-export ANTHROPIC_API_KEY="sk-ant-..."
-
-# OpenAI (GPT-4o)
-export OPENAI_API_KEY="sk-..."
-```
-
-Ya da dashboard üzerinden API anahtarlarını girin.
-
 ---
 
 ## ⚠️ Kritik Eşik Değerleri
 
-Bu eşikler hem sağlık etiketi oluşturmada hem öneri motorunda kullanılır:
-
-| Metrik | Eşik | Aşıldığında |
+| Metrik | Eşik | Kullanım Yeri |
 |---|---|---|
-| CPU Kullanımı | **> 85%** | Sağlık riski = 1; kapasite öneri tetiklenir |
-| Bellek Kullanımı | **> 88%** | Sağlık riski = 1; kapasite öneri tetiklenir |
-| Disk Kullanımı | **> 82%** | Kapasite öneri tetiklenir (daha düşük eşik: disk dolunca iyileştirilmesi zor) |
-| API Gecikmesi | **> 1.200 ms** | Sağlık riski = 1; trend öneri tetiklenir |
-| Hata Oranı | **> 5%** | Sağlık riski = 1; trend öneri tetiklenir |
+| vCPU Kullanımı | **> 90%** | Kapasite tahmini + öneri tetikleyici |
+| Bellek Kullanımı | **> 88%** | Kapasite tahmini + öneri tetikleyici |
+| Disk Kullanımı | **> 85%** | Kapasite tahmini + öneri tetikleyici |
+| API Gecikmesi | **> 1 200 ms** | Trend öneri tetikleyici |
+| Hata Oranı | **> 5%** | Trend öneri tetikleyici |
+| Log Z-Skoru (Yüksek) | **> 4.0** | Kritik log anomali önerisi |
+| Log Z-Skoru (Uyarı) | **> 2.0** | Uyarı seviyesi log anomali önerisi |
+| Cascade Eşiği | **≥ 3 log tipi** | Cascade riski uyarısı |
+| Ön-Arıza Güveni | **≥ %50** | Ön-arıza örüntü önerisi |
 
 ---
 
@@ -909,13 +836,13 @@ Bu eşikler hem sağlık etiketi oluşturmada hem öneri motorunda kullanılır:
 | Kategori | Kütüphane / Araç | Kullanım Amacı |
 |---|---|---|
 | **Makine Öğrenmesi** | scikit-learn | LR, RF, GBT; StandardScaler |
-| **Açıklanabilirlik** | shap | TreeExplainer, görselleştirme |
-| **Veri İşleme** | pandas, numpy | Özellik mühendisliği, zaman serisi |
-| **Görselleştirme** | matplotlib, seaborn | Grafik üretimi |
+| **Açıklanabilirlik** | shap | TreeExplainer, LinearExplainer, görselleştirme |
+| **Veri İşleme** | pandas, numpy | Özellik mühendisliği, zaman serisi, z-skor |
+| **Görselleştirme** | matplotlib, seaborn | Grafik üretimi (30+ PNG) |
 | **Model Serileştirme** | joblib | .pkl model kaydetme/yükleme |
 | **Arayüz** | streamlit, Pillow | Web dashboard |
-| **LLM — Claude** | anthropic | Claude Sonnet API entegrasyonu |
-| **LLM — GPT** | openai | GPT-4o API entegrasyonu |
+| **LLM — Claude** | anthropic | Claude Sonnet API + zenginleştirilmiş prompt |
+| **LLM — GPT** | openai | GPT-4o API + aynı prompt |
 | **Dil** | Python 3.10+ | Tüm pipeline |
 
 ---
@@ -932,226 +859,167 @@ Prototip                              →  Gerçek Sistem
 ────────────────────────────────────────────────────────
 metrics_generator.generate_metrics()  →  Prometheus HTTP API
 log_generator.generate_log_features() →  OpenSearch aggregation query
+log_generator.generate_raw_logs()     →  OpenSearch raw log query
+log_processor.run_log_pipeline()      →  Değişmez (aynı pipeline)
 Diğer tüm katmanlar                   →  Değişmez, aynı kod çalışır
 ```
 
 ### Tekrarlanabilirlik
 
 `SEED = 42` ile her çalıştırmada özdeş sonuçlar üretilir. `config.py` üzerinden
-tarih aralığı, incident tanımları veya eşik değerleri değiştirilerek farklı senaryolar test edilebilir.
+tarih aralığı, incident tanımları, kapasite değerleri veya eşikler değiştirilerek
+farklı senaryolar test edilebilir.
 
 ---
 
 ## 📚 Akademik Literatür Taraması
 
 CloudMon, birbirinden bağımsız gelişen altı araştırma alanının kesişim noktasında durur.
-Aşağıda her alan için temel çalışmalar ve CloudMon'un bu çalışmalarla ilişkisi ele alınmaktadır.
 
 ---
 
 ### 1. AIOps — Yapay Zekâ Destekli BT Operasyonları
 
-**AIOps**, büyük ölçekli BT sistemlerinin log, metrik ve olay verilerini makine öğrenmesiyle
-analiz ederek operasyonel zekâ üretmesini sağlayan disiplindir. 2017'de Gartner tarafından
-kavramsallaştırılmış; 2019'dan itibaren akademik literatürde yerini sağlamlaştırmıştır.
-
 | Çalışma | Katkı | CloudMon ile İlişki |
 |---|---|---|
-| **Dang et al. (2019)** — *"AIOps: Real-World Challenges and Research Innovations"* ICSE 2019 | AIOps'un endüstriyel zorlukları ve açık araştırma soruları; Microsoft deneyimleri | CloudMon'un öneri motorunu motive eden "noise reduction" ve "root cause localization" problemleri bu çalışmada tanımlanmıştır |
-| **Lim et al. (2014)** — *"Automated IT System Failure Prediction: A Deep Learning Approach"* | Makine öğrenmesiyle sistem arızası tahminine ilk kapsamlı yaklaşım | CloudMon sağlık sınıflandırıcısının temel motivasyonu |
-| **Soldani & Brogi (2022)** — *"Anomaly Detection and Failure Root Cause Analysis in (Micro)Service-Based Cloud Applications: A Survey"* ACM Computing Surveys | Bulut-tabanlı mikroservis sistemlerinde 40+ anomali tespit yöntemi karşılaştırması | CloudMon'un log+metrik fusion yaklaşımının konumlanması için temel referans |
-| **Chen et al. (2019)** — *"Outage Prediction and Diagnosis for Cloud Service Systems"* WWW 2019 | Microsoft Azure bulut servis kesintilerini tahmin eden hibrit ML yaklaşımı | CloudMon'un iki-katmanlı (kapasite + sağlık) mimari tasarımına ilham vermiştir |
+| **Dang et al. (2019)** — *"AIOps: Real-World Challenges"* ICSE 2019 | AIOps'un endüstriyel zorlukları; Microsoft deneyimleri | CloudMon'un proaktif öneri motorunu motive eden "noise reduction" ve "root cause localization" |
+| **Soldani & Brogi (2022)** — *"Anomaly Detection in Cloud Applications: A Survey"* ACM Computing Surveys | 40+ anomali tespit yöntemi karşılaştırması | CloudMon'un log+metrik fusion ve çok aşamalı pipeline yaklaşımının konumlanması |
+| **Chen et al. (2019)** — *"Outage Prediction for Cloud Service Systems"* WWW 2019 | Azure bulut servis kesintilerini tahmin eden hibrit ML | CloudMon'un iki-katmanlı (kapasite + log pipeline) mimari tasarımına ilham |
 
 ---
 
 ### 2. Anomali Tespiti ve Erken Uyarı Sistemleri
 
-Bu alandaki çalışmalar, bir sistemin "normal" durumundan sapmasını tespit etmeye odaklanır.
-
 | Çalışma | Katkı | CloudMon ile İlişki |
 |---|---|---|
-| **Chandola, Banerjee & Kumar (2009)** — *"Anomaly Detection: A Survey"* ACM Computing Surveys | Anomali tespitinin temel sınıflandırması: nokta, bağlamsal, kolektif anomaliler | CloudMon'un risk etiketleme mantığı "bağlamsal anomali" kategorisine girer — anlık eşik değil, zaman pencereli risk |
-| **Du et al. (2017)** — *"DeepLog: Anomaly Detection and Diagnosis from System Logs through Deep Learning"* CCS 2017 | LSTM ile sistem loglarında sıra anomali tespiti; ilk gerçek zamanlı log anomali yöntemi | CloudMon log verilerini time-series özellik olarak kullanır; DeepLog'un öncü sequence modeline alternatif basit-ama-yorumlanabilir yaklaşım |
-| **He et al. (2021)** — *"A Survey on Automated Log Analysis for Reliability Engineering"* ACM Computing Surveys | Log parsing, anomaly detection, failure diagnosis ve prediction üzerine 200+ makale taraması | CloudMon'un log_features.csv tasarımı bu taramanın "aggregation-based" yaklaşım sınıfına girmektedir |
-| **Nedelkoski et al. (2019)** — *"Anomaly Detection and Classification Using Distributed Tracing and Deep Learning for Microservices"* IEEE CCGRID | Dağıtık izleme verisiyle derin öğrenme tabanlı anomali tespiti | CloudMon servis bağımsızlık varsayımı yerine log sayımı aggregation tercih eder — daha az veri gereksinimiyle karşılaştırılabilir sonuç |
+| **Chandola et al. (2009)** — *"Anomaly Detection: A Survey"* ACM Computing Surveys | Nokta / bağlamsal / kolektif anomali sınıflandırması | CloudMon'un z-skor bazlı log anomali tespiti "kolektif anomali" yaklaşımına girer |
+| **Du et al. (2017)** — *"DeepLog"* CCS 2017 | LSTM ile sistem loglarında sıra anomali tespiti | CloudMon sayım bazlı agregasyon kullanır — daha az veri gereksinimiyle yorumlanabilir sonuç |
+| **He et al. (2021)** — *"Automated Log Analysis Survey"* ACM Computing Surveys | 200+ makale taraması: log parsing, anomaly, failure prediction | CloudMon'un 4 aşamalı hattı bu taramanın "aggregation → anomaly → prediction" akışını izler |
 
 ---
 
 ### 3. Bulut Kapasite Planlaması ve İş Yükü Tahmini
 
-Kapasite planlaması, uzun vadeli kaynak gereksinimini öngörerek doğru zamanda genişleme kararı vermek demektir.
-
 | Çalışma | Katkı | CloudMon ile İlişki |
 |---|---|---|
-| **Calheiros et al. (2015)** — *"WORKLOAD PREDICTION USING ARIMA MODEL AND ITS IMPACT TO RESOURCE PROVISIONING AND COST PARAMETER IN CLOUD COMPUTING ENVIRONMENTS"* IEEE TPDS | ARIMA ile CloudSim simülasyonunda kaynak tahsisi optimizasyonu; istatistiksel baseline | CloudMon tree-based ML tercih eder: ARIMA stasyonerlik gerektirir; OpenStack iş yükleri mevsimsel + trend + staj dönemleri içerdiğinden ARIMA tek başına yetersiz kalır |
-| **Lorido-Botran et al. (2014)** — *"A Review of Auto-Scaling Techniques for Elastic Applications in Cloud Environments"* Journal of Grid Computing | Elastik ölçekleme stratejileri: reaktif, öngörülü ve hibrit yaklaşımlar | CloudMon'un "eşiğe kaç gün" çıktısı doğrudan öngörülü ölçekleme kararlarını besler |
-| **Islam et al. (2012)** — *"Network Traffic Prediction by Using Seasonal ARIMA: A Statistical Approach"* IEEE AINA | Mevsimsel ARIMA ile ağ trafiği tahmini; döngüsel örüntü modelleme | CloudMon ağ trafiği yerine kaynak kullanımını hedefler; döngüsel örüntüler rolling feature olarak işlenir |
-| **Chen et al. (2021)** — *"An Empirical Study of Deep Learning Models for Workload Prediction in Cloud Data Centers"* ICDCS | LSTM, GRU, Transformer gibi derin öğrenme modellerinin iş yükü tahmininde karşılaştırması | CloudMon GBT tercih eder: derin öğrenme modelleri ~13 000 örnekte overfitting riskiyle karşılaşır; yorumlanabilirlik avantajı kaybolur |
+| **Calheiros et al. (2015)** — *"WORKLOAD PREDICTION USING ARIMA"* IEEE TPDS | ARIMA ile kaynak tahsisi optimizasyonu | CloudMon ML tercih eder: iki fazlı büyüme + staj dönemleri ARIMA'yı zorlar |
+| **Lorido-Botran et al. (2014)** — *"Auto-Scaling Techniques Review"* Journal of Grid Computing | Elastik ölçekleme stratejileri | CloudMon'un "eşiğe kaç gün" çıktısı doğrudan öngörülü ölçekleme kararlarını besler |
+| **Chen et al. (2021)** — *"Deep Learning Models for Workload Prediction"* ICDCS | LSTM, GRU, Transformer karşılaştırması | CloudMon GBT tercih eder: ~13 000 örnekte overfitting riski ve yorumlanabilirlik avantajı |
 
 ---
 
 ### 4. Açıklanabilir Yapay Zekâ (XAI) ve Operasyonlar
 
-Makine öğrenmesi modelleri "kara kutu" olduğunda operatör güvenmez — bu alan kara kutuyu açar.
-
 | Çalışma | Katkı | CloudMon ile İlişki |
 |---|---|---|
-| **Lundberg & Lee (2017)** — *"A Unified Approach to Interpreting Model Predictions"* NeurIPS 2017 | SHAP (SHapley Additive exPlanations) yönteminin önerilmesi; oyun teorisi tabanlı adil katkı atfı | CloudMon SHAP'ı doğrudan kullanır; bu çalışma temel referanstır |
-| **Lundberg et al. (2020)** — *"From Local Explanations to Global Understanding with Explainable AI for Trees"* Nature Machine Intelligence | TreeExplainer: ağaç tabanlı modeller için O(TLD) verimli SHAP hesabı | CloudMon TreeExplainer tercih eder — 500 test örneği ile makul sürede tamamlanır |
-| **Gunning & Aha (2019)** — *"DARPA's Explainable Artificial Intelligence (XAI) Program"* AI Magazine | XAI'nin askeri ve kamu sektörü uygulamalarında güven ve şeffaflık gereksinimleri | CloudMon aynı ihtiyacı operasyonel ortama taşır: "neden alarm?" sorusu yanıtlanmazsa operatör aksiyona geçmez |
-| **Molnar (2020)** — *"Interpretable Machine Learning: A Guide for Making Black Box Models Explainable"* Leanpub | LIME, SHAP, PDP, ICE gibi tüm yorumlanabilirlik yöntemlerinin kapsamlı incelemesi | CloudMon'un açıklanabilirlik bölümü tasarımında temel referans |
+| **Lundberg & Lee (2017)** — *"A Unified Approach to Interpreting Model Predictions"* NeurIPS 2017 | SHAP yönteminin önerilmesi | CloudMon SHAP'ı doğrudan kullanır; temel referans |
+| **Lundberg et al. (2020)** — *"Explainable AI for Trees"* Nature Machine Intelligence | TreeExplainer: ağaç modeller için verimli SHAP | CloudMon TreeExplainer + LinearExplainer birlikte kullanır |
+| **Gunning & Aha (2019)** — *"DARPA's XAI Program"* AI Magazine | Kamu sektörü uygulamalarında güven ve şeffaflık | CloudMon aynı ihtiyacı operasyonel ortama taşır: "neden alarm?" yanıtlanmazsa operatör aksiyona geçmez |
 
 ---
 
 ### 5. Log Analizi ve Özellik Çıkarımı
 
-Log verileri yapılandırılmamıştır; ML'de kullanılabilmesi için özelliğe dönüştürülmesi gerekir.
-
 | Çalışma | Katkı | CloudMon ile İlişki |
 |---|---|---|
-| **He et al. (2017)** — *"Drain: An Online Log Parsing Approach with Fixed Depth Tree"* IEEE ICDM | Gerçek zamanlı log ayrıştırma için sabit derinlikli ağaç yapısı; 1 ms/satır performansı | CloudMon log parsing yerine önceden tanımlı hata sayımı agregasyonunu kullanır — yapısal log template gerektirmez |
-| **Zhu et al. (2019)** — *"Tools and Benchmarks for Automated Log Parsing"* ICSE 2019 | 13 log parsing aracının 16 sistem üzerinde karşılaştırması; Drain en iyi sonuç | CloudMon'un log tasarımı bu benchmark sonuçlarından hareketle basit sayım tabanlı yaklaşımı tercih eder |
-| **Zhang et al. (2020)** — *"Robust Log-Based Anomaly Detection on Unstable Log Data"* FSE 2020 | Log template değiştiğinde anomali modellerinin bozulması problemi ve çözümü | CloudMon sayım tabanlı agregasyon kullandığından template değişikliklerine karşı doğal olarak dayanıklıdır |
-| **Jiang et al. (2024)** — *"LILAC: Log Parsing using LLMs with Adaptive Parsing Cache"* ICSE 2024 | GPT-4 ile sıfır-atış log ayrıştırma; önceden etiket gerektirmeyen yaklaşım | CloudMon'un LLM katmanı bu alandaki en son trendi yansıtır — log içeriğini doğrudan LLM'e göndermek yerine agregat özellikler gönderilir (token verimliliği) |
+| **He et al. (2017)** — *"Drain: Online Log Parsing"* IEEE ICDM | Gerçek zamanlı log ayrıştırma; 1 ms/satır performansı | CloudMon önceden tanımlı sayım agregasyonu kullanır — template gerektirmez |
+| **Zhang et al. (2020)** — *"Robust Log-Based Anomaly Detection"* FSE 2020 | Template değiştiğinde anomali modellerinin bozulması | CloudMon sayım tabanlı olduğundan template değişikliklerine doğal olarak dayanıklı |
+| **Jiang et al. (2024)** — *"LILAC: Log Parsing using LLMs"* ICSE 2024 | GPT-4 ile sıfır-atış log ayrıştırma | CloudMon LLM'e ham log değil agregat özellikler gönderir (token verimliliği) |
 
 ---
 
 ### 6. LLM ile BT Operasyonları
 
-Büyük dil modellerinin SRE (Site Reliability Engineering) ve BT yönetimine entegrasyonu 2022'den itibaren hız kazanmıştır.
-
 | Çalışma | Katkı | CloudMon ile İlişki |
 |---|---|---|
-| **Ahmed et al. (2023)** — *"Recommending Root-Cause and Mitigation Steps for Cloud Incidents using Large Language Models"* ICSE 2023 | GPT-4 ile Azure incident'larının kök neden analizi ve düzeltme adımı önerisi; %22 F1 artışı | CloudMon aynı hedefi taşır ancak yapılandırılmış bağlam (SHAP + kural motoru çıktısı) ile prompt kalitesini artırır |
-| **Jin et al. (2023)** — *"LLM-based Log Parsing"* arXiv 2023 | Log parsing görevinde GPT-4o ve Claude'un karşılaştırması | CloudMon iki LLM'i aynı prompt ile karşılaştıran ilk açık kaynak prototip olma özelliği taşır |
-| **Guo et al. (2024)** — *"Owl: A Large Language Model for IT Operations"* arXiv 2024 | BT operasyonları için ince ayar yapılmış özel LLM; log + metrik + komut birleşimi | CloudMon genel amaçlı LLM'leri (Claude, GPT-4o) kullanır — özel fine-tuning gerektirmeden operasyonel değer üretebileceğini gösterir |
-| **Wang et al. (2023)** — *"GPT-4 is Not Yet a Human Expert in Cybersecurity: A Benchmarking Study"* arXiv 2023 | LLM'lerin güvenlik ve altyapı uzman kararlarındaki sınırlılıkları | CloudMon bu sınırlılığı kabul ederek LLM'i kural motorunun üzerine bir katman olarak konumlar, tek karar vericisi yapmaz |
+| **Ahmed et al. (2023)** — *"Recommending Root-Cause using LLMs"* ICSE 2023 | GPT-4 ile Azure incident kök neden analizi; %22 F1 artışı | CloudMon yapılandırılmış bağlam (SHAP + log içgörüleri + kural motoru) ile prompt kalitesini artırır |
+| **Jin et al. (2023)** — *"LLM-based Log Parsing"* arXiv | GPT-4o ve Claude karşılaştırması | CloudMon iki LLM'i aynı prompt ile karşılaştıran açık kaynak prototip |
+| **Guo et al. (2024)** — *"Owl: A Large Language Model for IT Operations"* arXiv | BT operasyonları için ince ayar yapılmış özel LLM | CloudMon genel amaçlı LLM'lerin özel fine-tuning gerektirmeden operasyonel değer üretebileceğini gösterir |
+| **Wang et al. (2023)** — *"GPT-4 in Cybersecurity"* arXiv | LLM'lerin uzman kararlarındaki sınırlılıkları | CloudMon bu sınırlılığı kabul ederek LLM'i kural motorunun üstüne katman olarak konumlar |
 
 ---
 
 ### 7. OpenStack ve Bulut Altyapısı İzleme
 
-OpenStack'e özgü veya uygulamalı izleme çalışmaları:
-
 | Çalışma | Katkı | CloudMon ile İlişki |
 |---|---|---|
-| **Kannan et al. (2019)** — *"Compact Cuckoo Hashing Based Failure Prediction in OpenStack"* IEEE Cloud | OpenStack Nova ve Cinder arızalarını makine öğrenmesiyle tahmin etme | CloudMon benzer OpenStack servislerini (Nova, Keystone, Neutron, Cinder) kapsar; bu çalışma doğrulama referansıdır |
-| **Alam et al. (2017)** — *"Orchestration of Monitoring for IaaS Cloud Platforms: OpenStack Case Study"* IEEE CLOUD | Prometheus + OpenStack entegrasyonunun sistematik analizi | CloudMon veri kaynağı olarak Prometheus + OpenSearch mimariyi benimser |
-| **Chiang et al. (2017)** — *"Detecting and Localizing End-to-End Performance Degradation for Cellular Networks"* INFOCOM | Ağ performans bozunumunun yapısal analizi; OpenStack'e uyarlanabilir yöntemler | CloudMon API latency bozunumunu trend analizi olarak modellemekte bu çalışmadan ilham alır |
-| **Mahimkar et al. (2012)** — *"Detecting the Performance Impact of Upgrades in Large Operational Networks"* SIGCOMM | Büyük ölçekli ağ değişikliklerinin performans etkisi tespiti | CloudMon kapasite genişlemesi sonrası ani düşüşleri bu yaklaşımla modeller |
+| **Kannan et al. (2019)** — *"Failure Prediction in OpenStack"* IEEE Cloud | OpenStack Nova ve Cinder arızalarını ML ile tahmin | CloudMon benzer servisleri (Nova, Keystone, Neutron, Cinder) kapsar |
+| **Alam et al. (2017)** — *"Orchestration of Monitoring for IaaS"* IEEE CLOUD | Prometheus + OpenStack entegrasyonunun sistematik analizi | CloudMon veri kaynağı olarak Prometheus + OpenSearch mimarisini benimser |
 
 ---
 
 ## 🏆 Özgün Katkılar ve Yenilikçi Yanlar
 
-Mevcut literatür incelendiğinde CloudMon'un şu alanlarda **özgün katkı** sunduğu görülmektedir:
+---
+
+### Katkı 1 — Proaktif Log Analizi ile Ön-Arıza Tespiti
+
+```
+Mevcut Literatür                   CloudMon
+────────────────────────────────   ─────────────────────────────────────────
+Eşik tabanlı alarm (reaktif)  →   Ön-arıza örüntü çıkarımı (proaktif)
+Metrik odaklı anomali tespiti →   15 tip log × 4 aşamalı pipeline
+İnsident sonrası analiz       →   Buildup döneminde erken uyarı sinyalleri
+```
+
+15 incident'ın buildup penceresini analiz ederek hangi log tiplerinin arızadan
+ortalama kaç saat önce arttığı tespit edilmiştir. Bu örüntüler gerçek zamanlı
+izlemede "öncü sinyal" olarak kullanılır ve operatöre olay gerçekleşmeden müdahale fırsatı sunar.
 
 ---
 
-### Katkı 1 — Uçtan Uca Entegre Pipeline
+### Katkı 2 — Mutlak Değer Takibi ve İki Fazlı Büyüme Senaryosu
+
+Çoğu kapasite çalışması soyut yüzde değerleriyle çalışır. CloudMon:
+
+- **Mutlak değer takibi:** `vcpu_used/vcpu_total`, `memory_used_gb/memory_total_gb`, `disk_used_tb/disk_total_tb`
+- **İki fazlı büyüme:** Gerçek bir üniversite kümesinin hızlı başlangıç + yavaşlayan büyüme örüntüsü
+- **"Dolum tarihi" çıktısı:** "vCPU ~8 ay sonra dolacak" gibi somut, planlanabilir öngörüler
+
+Bu çerçeve, soyut "CPU %79.6" bilgisini "1592/2000 vCPU kullanılıyor, 8 ay sonra kapasite bitiyor" biçiminde operasyonel karara dönüştürür.
+
+---
+
+### Katkı 3 — Uçtan Uca Entegre Pipeline
 
 ```
 Mevcut Literatür                    CloudMon
 ──────────────────────────────      ────────────────────────────────────────
 Anomali Tespiti çalışmaları    →    Tespit + tahmin + açıklama + öneri birleşik
-Kapasite planlama çalışmaları  →    Kapasite + sağlık riski paralel
-XAI çalışmaları                →    Açıklama, öneri aksiyonuna dönüştürülmüş
+Kapasite planlama çalışmaları  →    Kapasite + 4 aşamalı log pipeline paralel
+XAI çalışmaları                →    Açıklama aksiyona dönüştürülmüş
 LLM çalışmaları                →    LLM çıktısı kural motoru ile kalibre edilmiş
 ```
 
-Literatürdeki çalışmaların büyük çoğunluğu yalnızca **tek bir soruya** odaklanır
-(anomali tespiti VEYA kapasite tahmini VEYA açıklanabilirlik). CloudMon tüm bu
-katmanları **tek bir çalıştırılabilir pipeline'da** birleştirir.
-
 ---
 
-### Katkı 2 — Log + Metrik Geçici Hizalaması
-
-Çoğu çalışma ya yalnızca metrikleri ya da yalnızca logları kullanır.
-
-```
-Çalışma                 Girdi
-──────────────────      ─────────────────────────────────
-DeepLog (2017)          Sadece log sequence
-ARIMA (2015)            Sadece metrik time series
-Chen et al. (2019)      KPI metrikleri (log yok)
-CloudMon                Metrik + log → zaman damgası üzerinden birleştirilmiş
-                        ortak özellik matrisinde → tek model
-```
-
-Bu birleştirme, SHAP analizinde net olarak görülür: sağlık riski modelinde
-en yüksek katkı sağlayan özellikler arasında hem `error_rate_percent`
-(metrik) hem de `timeout_count_rmean_6h` (log türevi) birlikte yer almaktadır.
-
----
-
-### Katkı 3 — SHAP Çıktısının Aksiyona Dönüştürülmesi
-
-Literatürdeki XAI çalışmaları genellikle açıklamada durur:
-> *"Bu özellik modelin tahminini +0.31 artırdı."*
-
-CloudMon açıklamayı aksiyona bağlar:
-> *"Bu uyarı özellikle `timeout_count_rmean_6h` yüksekliğinden kaynaklanıyor.
-> → Nova API timeout eşiğini kontrol edin
-> → DB bağlantı havuzunu genişletin
-> → Son 6 saatin Cinder loglarını inceleyin"*
-
-Bu bağlantı, XAIOps (Explainable AI for Operations) alanında mevcut literatürde
-nadiren görülen ancak sahada kritik öneme sahip bir köprüdür.
-
----
-
-### Katkı 4 — Alan Bilgisinin Modele Entegrasyonu (Staj Dönemleri)
-
-Genel bulut izleme çalışmaları **domain-agnostic** tasarlanır: iş takvimi,
-organizasyonel örüntüler veya planlı yük artışları modele dahil edilmez.
-
-CloudMon **akademik takvim farkındalığı** ekler:
+### Katkı 4 — Alan Bilgisinin Entegrasyonu (Staj Dönemleri)
 
 ```python
 STAJ_PERIODS = [
     {"name": "Yaz Stajı 2025", "start": "2025-06-01", "end": "2025-09-12",
-     "vm_burst": 185, "cpu_extra": 22.0, "mem_extra": 15.0},
+     "vm_burst": 185, "vcpu_extra": 370, "mem_extra": 15.0, "disk_extra": 8.0},
     ...
 ]
 ```
 
-Bu bilgi veri üretimini, öneri motorunu ve LLM bağlamını etkiler.
-"Staja 10 gün kaldı, bellek kotasını %15 artırın" önerisi bu entegrasyonun
-doğrudan çıktısıdır. Literatürde bu düzeyde alan bilgisi entegrasyonu oldukça nadirdir.
+Staj dönemi bilgisi; veri üretimini, log buildup örüntülerini, öneri motorunu ve LLM bağlamını
+birlikte etkiler. "Staja 10 gün kaldı, vCPU kotasını ve kota uyarı eşiklerini artırın" önerisi
+bu entegrasyonun doğrudan çıktısıdır.
 
 ---
 
-### Katkı 5 — Çift LLM Karşılaştırma Çerçevesi
+### Katkı 5 — Çift LLM ve Zenginleştirilmiş Prompt
 
 ```
-Mevcut Çalışmalar                   CloudMon
-─────────────────────────────────   ──────────────────────────────────────────
-Ahmed et al. (2023): Sadece GPT-4   Claude Sonnet + GPT-4o yan yana
-Guo et al. (2024): Tek özel LLM     Genel amaçlı LLM'ler, aynı yapılandırılmış
-Jin et al. (2023): Log parsing       bağlam, karşılaştırmalı çıktı
+Ahmed et al. (2023): Sadece GPT-4, yalnızca metrik  →  CloudMon: Claude + GPT-4o yan yana
+                                                         Metrik + log anomali + ön-arıza +
+                                                         cascade + servis sağlık + SHAP
 ```
 
-Aynı zenginleştirilmiş bağlamı (SHAP top-8 + kapasite tarihleri + staj durumu +
-haftalık hata özeti + kural motoru çıktıları) iki farklı LLM'e göndererek
-yanıtları karşılaştırmak, hem model davranış farklılıklarını hem de
-prompt mühendisliği kalitesini değerlendirmeye olanak tanır.
-
----
-
-### Katkı 6 — Sentetik Veri Üretiminin Sistematik Tasarımı
-
-Açık kaynak OpenStack izleme veri kümeleri son derece kısıtlıdır; çoğu çalışma
-ticari veya gizli veri kullanır. CloudMon:
-
-- **Gerçekçilik:** Günlük kosinüs + haftalık sinüs + uzun vadeli lineer trend + 15 tanımlı incident
-- **Tekrarlanabilirlik:** `SEED = 42`, deterministik pipeline
-- **Yapılandırılabilirlik:** `config.py` üzerinden tarih, eşik, incident, staj dönemi
-- **Entegrasyon hazırlığı:** Sentetik üretim katmanı Prometheus/OpenSearch çağrısıyla
-  birebir değiştirilebilir arayüz
-
-Bu tasarım, araştırmacıların aynı altyapıyı farklı parametrelerle test etmesine
-ve gerçek sistemlere minimum değişiklikle entegre etmesine olanak tanır.
+Aynı zenginleştirilmiş bağlamı iki farklı LLM'e göndererek yanıtları karşılaştırmak,
+hem model davranış farklılıklarını hem de prompt mühendisliği kalitesini değerlendirmeye
+olanak tanır.
 
 ---
 
@@ -1160,34 +1028,27 @@ ve gerçek sistemlere minimum değişiklikle entegre etmesine olanak tanır.
 ```
 Boyut                      Geleneksel Yaklaşım    CloudMon
 ─────────────────────────  ───────────────────    ──────────────────────────────
-Analiz kapsamı             Tek katman             6 katman entegre pipeline
-Veri kaynağı               Metrik VEYA log        Metrik + log zaman hizalaması
+Analiz kapsamı             Tek katman             6 adım entegre pipeline
+Veri kaynağı               Metrik VEYA log        Metrik + 15 tip log zaman hizalaması
+Log analizi                Reaktif alarm          4 aşamalı proaktif pipeline
+Ön-arıza tespiti           Yok                    Buildup analizi + güven skoru
+Kapasite takibi            Yüzde odaklı           Mutlak değer + iki fazlı büyüme
 Açıklanabilirlik           Opsiyonel              Zorunlu; aksiyona dönüştürülmüş
 Alan bilgisi               Yok                    Staj takvimi + donanım alımları
-LLM kullanımı              Yok veya tek model     İki model karşılaştırmalı
-Veri üretimi               Kara kutu              Yapılandırılabilir + tekrarlanabilir
+LLM kullanımı              Yok veya tek model     İki model + zenginleştirilmiş bağlam
 Hedef çıktı                Anomali etiketi        Önceliklendirilmiş aksiyon listesi
-Yorumlanabilirlik          Kara kutu              SHAP → top-1 özellik → öneri metni
 ```
 
 ---
 
 ### Açık Araştırma Soruları
 
-Bu çalışma aşağıdaki soruları gündeme taşımaktadır:
+1. **Kavram kayması:** İnsan müdahalesi olmadan staj dönemlerine uyum sağlayan sürekli öğrenme nasıl tasarlanır?
 
-1. **Kavram kayması (concept drift):** İnsan müdahalesi olmadan staj dönemlerine
-   uyum sağlayan sürekli öğrenme mekanizmaları nasıl tasarlanır?
+2. **Log örüntülerinin genellenebilirliği:** Bir kümede çıkarılan ön-arıza örüntüleri farklı bir OpenStack kümesine transfer edilebilir mi?
 
-2. **Çok kiracılı ortamlar:** Tek bir model birden fazla OpenStack tenant için
-   genellenebilir mi, yoksa her tenant kendi modelini mi gerektiriyor?
+3. **LLM güvenilirliği:** Aynı bağlama farklı LLM'lerin farklı öneriler üretmesi operasyonel güvenilirlik açısından nasıl ele alınmalı?
 
-3. **LLM güvenilirliği:** Aynı bağlama farklı LLM'lerin farklı öneriler üretmesi
-   operasyonel güvenilirlik açısından nasıl ele alınmalı?
+4. **Cascade tespiti hassasiyeti:** Z-skor eşiği ve minimum anomali sayısı (≥3) farklı küme ölçeklerinde nasıl kalibre edilmeli?
 
-4. **Gerçek zamanlı SHAP:** TreeExplainer'ı saatlik cron job ile çalıştırmak
-   hesaplama açısından sürdürülebilir mi? Yaklaşık SHAP (FastSHAP) entegrasyonu
-   bu sorunu çözer mi?
-
-5. **Öneri kalite ölçütü:** Üretilen önerilerin kalitesini nicel olarak ölçmek
-   için hangi metrikler kullanılabilir? İnsan değerlendirmesi ile otomatik metrik arasındaki korelasyon?
+5. **Gerçek zamanlı SHAP:** 9 kombinasyon için LinearExplainer/TreeExplainer'ı saatlik çalıştırmak hesaplama açısından sürdürülebilir mi?

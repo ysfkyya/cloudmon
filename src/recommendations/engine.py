@@ -1,12 +1,11 @@
 """
-Proaktif öneri motoru — tarih bazlı çıktı + staj uyarıları + LLM besleme.
+Proaktif öneri motoru — kapasite, log anomalileri ve staj uyarıları.
 
-Öneri kategorileri
-------------------
-  KAPASİTE : kaynak eşiğine tahmini ulaşma TARİHİ ile
-  SAĞLIK   : risk sınıflandırıcısı yüksek olasılık
-  TREND    : haftalık hata oranı bozulması
-  STAJ     : aktif veya yaklaşan staj dönemi uyarısı
+Öneri kategorileri:
+  KAPASİTE : kaynak eşiğine tahmini ulaşma tarihi
+  LOG      : log pipeline anomali ve örüntü bulgularına dayalı
+  TREND    : haftalık log ve metrik bozulmaları
+  STAJ     : aktif veya yaklaşan staj dönemi
 """
 
 import os
@@ -18,21 +17,20 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-from config import THRESHOLDS, RISK_HORIZON, RESULTS_DIR, STAJ_PERIODS, CAPACITY_EXPANSIONS
-
+from config import THRESHOLDS, RESULTS_DIR, STAJ_PERIODS
 
 _CAPACITY_RULES = [
     {
-        "resource":      "cpu_usage_percent",
-        "label":         "CPU Kullanımı",
+        "resource":      "vcpu_usage_percent",
+        "label":         "vCPU Tahsis Oranı",
         "unit":          "%",
-        "warn_days":     60,
-        "critical_days": 21,
+        "warn_days":     90,
+        "critical_days": 30,
         "suggestions": [
-            "Compute node'larında yük dengelemesi (live migration) uygulayın.",
-            "VM flavour sınırlamalarını gözden geçirin; CPU yoğun iş yüklerini izole edin.",
-            "Ölçek genişletme (scale-out) için ek compute node alımını planlayın.",
-            "Staj dönemine denk geliyorsa kullanıcı kotalarını daraltın.",
+            "Yeni compute node alımı için satın alma sürecini başlatın (temin süresi ~60 gün).",
+            "vCPU overcommit oranını gözden geçirin; kullanılmayan instance'ları sonlandırın.",
+            "Büyük flavour talepleri için Nova scheduler ağırlıklarını kısıtlayın.",
+            "Staj dönemlerine denk geliyorsa kullanıcı vCPU kotalarını daraltın.",
         ],
     },
     {
@@ -57,43 +55,42 @@ _CAPACITY_RULES = [
             "Eski Nova instance snapshot'larını ve kullanılmayan Cinder volume'larını temizleyin.",
             "Log rotasyon politikasını gözden geçirin; OpenSearch index'lerini arşivleyin.",
             "Ek Cinder storage backend'i veya NFS mount'u ekleyin.",
-            "Staj kullanıcılarının disk kotalarını kontrol edin.",
         ],
     },
 ]
 
-_HEALTH_SUGGESTIONS = {
-    "timeout":             "Nova API ve Keystone timeout değerlerini artırın; bağlantı havuzu boyutunu büyütün.",
-    "db_connection":       "MySQL/MariaDB max_connections parametresini artırın; bağlantı havuzu sağlığını izleyin.",
-    "resource_exhausted":  "Yük dengesizliğini gidermek için Nova scheduler ağırlıklarını ve filtrelerini ayarlayın.",
-    "quota_exceeded":      "Keystone proje kotalarını gözden geçirin; staj kullanıcıları kota aşımına yol açıyor olabilir.",
-    "auth_failure":        "Keystone token süresi ve revocation listesi yapılandırmasını gözden geçirin.",
-    "network_error":       "Neutron OVS agent durumunu ve VLAN yapılandırmalarını kontrol edin.",
-    "scheduler_error":     "Nova compute node'larının servis durumunu ve kaynak raporlamasını doğrulayın.",
-    "io_error":            "Cinder backend sağlığını ve iSCSI bağlantılarını denetleyin.",
+_LOG_SUGGESTIONS = {
+    "timeout_count":               "Nova API ve Keystone timeout değerlerini artırın; bağlantı havuzu boyutunu büyütün.",
+    "db_connection_count":         "MySQL/MariaDB max_connections parametresini artırın; bağlantı havuzu sağlığını izleyin.",
+    "resource_exhausted_count":    "Nova scheduler ağırlıklarını ve filtrelerini güncelleyin; compute kaynaklarını dengeleyin.",
+    "quota_exceeded_count":        "Keystone proje kotalarını gözden geçirin; staj kullanıcıları kota aşımına yol açıyor olabilir.",
+    "auth_failure_count":          "Keystone token süresi ve revocation listesi yapılandırmasını gözden geçirin.",
+    "network_error_count":         "Neutron OVS agent durumunu ve VLAN yapılandırmalarını kontrol edin.",
+    "scheduler_error_count":       "Nova compute node'larının servis durumunu ve kaynak raporlamasını doğrulayın.",
+    "io_error_count":              "Cinder backend sağlığını ve iSCSI bağlantılarını denetleyin.",
+    "slow_response_count":         "API yanıt sürelerini izleyin; connection pool ve thread pool boyutlarını artırmayı değerlendirin.",
+    "memory_pressure_count":       "Compute node'larında bellek kullanımını izleyin; OOM killer loglarını kontrol edin.",
+    "connection_pool_warn_count":  "DB bağlantı havuzu kapasitesini artırın; oslo.db max_pool_size değerini ayarlayın.",
+    "scheduler_degradation_count": "Nova scheduler yanıt sürelerini profilleyin; placement API performansını kontrol edin.",
+    "quota_pressure_count":        "Kota limitlerini yaklaşan staj dönemine göre önceden gözden geçirin.",
+    "disk_io_degradation_count":   "Cinder backend'in I/O latency değerlerini izleyin; storage array queue depth'ini kontrol edin.",
+    "cascade_indicator_count":     "Birden fazla servis aynı anda bozuluyor — sistem genelinde bir köklü neden araştırın.",
 }
 
-_SEVERITY_LABELS = {
-    "critical": "KRİTİK",
-    "warning":  "UYARI",
-    "info":     "BİLGİ",
-}
+_SEVERITY_LABELS = {"critical": "KRİTİK", "warning": "UYARI", "info": "BİLGİ"}
 
-
-# ── Ana fonksiyon ─────────────────────────────────────────────────────────────
 
 def generate_recommendations(
     feature_df: pd.DataFrame,
     capacity_results: dict,
-    health_results: dict,
     shap_capacity: dict,
-    shap_health: dict,
-) -> list[dict]:
+    log_insights: dict = None,
+) -> list:
     recs   = []
     ts_now = str(feature_df.index[-1])
 
     recs += _capacity_recommendations(feature_df, capacity_results, shap_capacity, ts_now)
-    recs += _health_recommendations(health_results, shap_health, ts_now)
+    recs += _log_anomaly_recommendations(log_insights or {}, ts_now)
     recs += _trend_recommendations(feature_df, ts_now)
     recs += _staj_recommendations(ts_now)
 
@@ -147,62 +144,96 @@ def _capacity_recommendations(feature_df, cap_results, shap_cap, ts_now):
             detail += f" En etkili SHAP özelliği: '{top_feat}'."
 
         recs.append({
-            "severity":        severity,
-            "category":        "KAPASİTE",
-            "title":           f"{rule['label']} — Tahmini Eşik Tarihi: {est}",
-            "detail":          detail,
-            "actions":         rule["suggestions"],
-            "estimated_date":  est,
-            "days_remaining":  int(days),
-            "timestamp":       ts_now,
+            "severity":       severity,
+            "category":       "KAPASİTE",
+            "title":          f"{rule['label']} — Tahmini Eşik Tarihi: {est}",
+            "detail":         detail,
+            "actions":        rule["suggestions"],
+            "estimated_date": est,
+            "days_remaining": int(days),
+            "timestamp":      ts_now,
         })
 
     return recs
 
 
-# ── Sağlık önerileri ─────────────────────────────────────────────────────────
+# ── Log anomali önerileri ─────────────────────────────────────────────────────
 
-def _health_recommendations(health_results, shap_health, ts_now):
-    recs   = []
-    best_m = max(health_results["models"].items(), key=lambda x: x[1]["F1"])[0]
-    mv     = health_results["models"][best_m]
-    y_proba = mv["y_proba"]
+def _log_anomaly_recommendations(log_insights: dict, ts_now: str) -> list:
+    """Log pipeline çıktısından aksiyon gerektiren durumları öneri olarak üretir."""
+    recs = []
 
-    last_prob = float(y_proba[-48:].mean()) if len(y_proba) >= 48 else float(y_proba.mean())
+    # Anomali tabanlı öneriler
+    for anom in log_insights.get("anomalies_last_24h", [])[:5]:
+        log_type = anom.get("log_type", "")
+        zscore   = anom.get("max_zscore", 0)
+        label    = anom.get("label", log_type)
+        ratio    = anom.get("ratio", 1)
 
-    if last_prob >= 0.65:
-        severity = "critical" if last_prob >= 0.80 else "warning"
-
-        err_features = [
-            "timeout", "db_connection", "resource_exhausted",
-            "quota_exceeded", "auth_failure", "network_error", "scheduler_error",
-        ]
-        top_err_type = ""
-        if shap_health.get("top_features"):
-            for feat_info in shap_health["top_features"]:
-                for et in err_features:
-                    if et in feat_info["feature"]:
-                        top_err_type = et
-                        break
-                if top_err_type:
-                    break
-
-        action_base = [
-            f"Sistem risk olasılığı yüksek ({last_prob:.0%}). Nova, Keystone, Neutron servis durumlarını kontrol edin.",
-            "Son 6 saat içindeki CRITICAL log kayıtlarını gözden geçirin.",
-        ]
-        if top_err_type and top_err_type in _HEALTH_SUGGESTIONS:
-            action_base.append(_HEALTH_SUGGESTIONS[top_err_type])
+        severity = "critical" if zscore >= 4.0 or ratio >= 5 else "warning"
+        suggestion = _LOG_SUGGESTIONS.get(log_type, "İlgili servis loglarını inceleyin.")
 
         recs.append({
             "severity":  severity,
-            "category":  "SAĞLIK",
-            "title":     f"Sistem Risk Uyarısı — Olasılık: {last_prob:.0%} ({best_m})",
+            "category":  "LOG ANOMALİSİ",
+            "title":     f"{label} — Anormal Artış (z={zscore:.1f}, {ratio:.1f}x normal)",
             "detail":    (
-                f"Son 48 saatlik test penceresinde ortalama risk olasılığı {last_prob:.1%}. "
-                f"En etkili bileşen: '{top_err_type or 'belirsiz'}'."
+                f"Son 24 saatte '{label}' log sayısı normalin {ratio:.1f} katına çıktı "
+                f"(z-skor: {zscore:.1f}). Bu erken uyarı sinyali yaklaşan bir soruna işaret edebilir."
             ),
-            "actions":   action_base,
+            "actions": [
+                suggestion,
+                "Son 6 saatin servis loglarını ayrıntılı inceleyin.",
+                "İlgili kapasite metriklerini (vCPU, bellek) beraber değerlendirin.",
+            ],
+            "timestamp": ts_now,
+        })
+
+    # Cascade uyarısı
+    cascade = log_insights.get("cascade_events_recent", [])
+    if cascade:
+        latest = cascade[-1]
+        recs.append({
+            "severity":  "critical",
+            "category":  "CASCADE RİSKİ",
+            "title":     f"Çok Servisli Bozulma Tespit Edildi ({latest['start']})",
+            "detail":    (
+                f"Birden fazla OpenStack servisi aynı anda anomali gösterdi "
+                f"({latest['duration_h']:.1f} saat boyunca). "
+                f"Bu örüntü sistemik bir sorunun habercisi olabilir."
+            ),
+            "actions": [
+                "Nova, Neutron ve Keystone servis durumlarını eş zamanlı kontrol edin.",
+                "OpenStack health-check komutunu çalıştırın: openstack service list.",
+                "RabbitMQ kuyruk derinliğini ve DB bağlantı sayısını inceleyin.",
+                "Tüm compute ve network node'larında agent durumunu doğrulayın.",
+            ],
+            "timestamp": ts_now,
+        })
+
+    # Ön-arıza örüntüsü uyarısı
+    patterns = log_insights.get("prefailure_patterns", [])
+    active_patterns = [
+        p for p in patterns
+        if p.get("is_warning_type") and p.get("confidence", 0) >= 0.5
+    ]
+    if active_patterns:
+        top = active_patterns[0]
+        recs.append({
+            "severity":  "warning",
+            "category":  "ÖN-ARIZA ÖRÜNTÜSÜ",
+            "title":     f"Tarihsel Arıza Sinyali: {top['label']}",
+            "detail":    (
+                f"'{top['label']}' log tipi, geçmiş {top['observed_times']} incidentte "
+                f"arızadan ortalama {top['lead_time_hours']:.0f} saat önce "
+                f"+{top['avg_increase_pct']:.0f}% artış gösterdi "
+                f"(güven: {top['confidence']:.0%}). Mevcut veriler bu örüntüyle örtüşüyor."
+            ),
+            "actions": [
+                f"'{top['label']}' tipindeki logların son trendini inceleyip müdahale planı hazırlayın.",
+                "Benzer geçmiş incident'lerin kök neden analizini gözden geçirin.",
+                "İlgili OpenStack servislerinde önleyici bakım (restart, config review) yapın.",
+            ],
             "timestamp": ts_now,
         })
 
@@ -213,20 +244,22 @@ def _health_recommendations(health_results, shap_health, ts_now):
 
 def _trend_recommendations(feature_df, ts_now):
     recs   = []
-    window = 168  # 1 hafta
+    window = 168
 
     trend_checks = [
-        ("error_rate_percent",        "Hata Oranı",     "%",   0.5,   1.5),
-        ("api_latency_ms",            "API Gecikmesi",  "ms",  50.0,  150.0),
-        ("resource_exhausted_count",  "Kaynak Yetersizliği Hatası", "adet", 20.0, 60.0),
-        ("quota_exceeded_count",      "Kota Aşımı Hatası",          "adet",  5.0, 20.0),
-        ("timeout_count",             "Timeout Hatası", "adet", 30.0,  100.0),
+        ("error_rate_percent",           "Hata Oranı",               "%",    0.5,   1.5),
+        ("api_latency_ms",               "API Gecikmesi",            "ms",  50.0, 150.0),
+        ("resource_exhausted_count",     "Kaynak Tükenmesi Hatası",  "adet", 20.0,  60.0),
+        ("quota_exceeded_count",         "Kota Aşımı Hatası",        "adet",  5.0,  20.0),
+        ("timeout_count",                "Timeout Hatası",           "adet", 30.0, 100.0),
+        ("slow_response_count",          "Yavaş Yanıt Uyarısı",      "adet", 15.0,  50.0),
+        ("connection_pool_warn_count",   "Bağlantı Havuzu Uyarısı",  "adet", 10.0,  40.0),
+        ("scheduler_degradation_count",  "Zamanlayıcı Bozulma Uyarısı", "adet", 8.0, 30.0),
     ]
 
     for col, label, unit, warn_rise, crit_rise in trend_checks:
         if col not in feature_df.columns or len(feature_df) < window * 2:
             continue
-
         prev_week = feature_df[col].iloc[-(window * 2): -window].mean()
         last_week = feature_df[col].iloc[-window:].mean()
         rise      = last_week - prev_week
@@ -240,7 +273,6 @@ def _trend_recommendations(feature_df, ts_now):
             continue
 
         pct_change = (rise / max(prev_week, 0.001)) * 100
-
         recs.append({
             "severity":  severity,
             "category":  "TREND",
@@ -252,7 +284,7 @@ def _trend_recommendations(feature_df, ts_now):
             "actions": [
                 f"{label} değişimini inceleyin; ilgili servislerin loglarını kontrol edin.",
                 "Değişim staj dönemine denk geliyorsa kullanıcı kota ayarlarını gözden geçirin.",
-                "Değişim keskin ise yakın zamanda yapılan yapılandırma güncellemelerini kontrol edin.",
+                "Değişim keskin ise yakın zamanda yapılan yapılandırma değişikliklerini araştırın.",
             ],
             "timestamp": ts_now,
         })
@@ -262,7 +294,7 @@ def _trend_recommendations(feature_df, ts_now):
 
 # ── Staj uyarıları ────────────────────────────────────────────────────────────
 
-def _staj_recommendations(ts_now: str) -> list[dict]:
+def _staj_recommendations(ts_now: str) -> list:
     recs       = []
     current_ts = pd.Timestamp(ts_now)
 
@@ -275,18 +307,17 @@ def _staj_recommendations(ts_now: str) -> list[dict]:
             recs.append({
                 "severity":  "warning",
                 "category":  "STAJ",
-                "title":     f"{staj['name']} Aktif — {days_left} Gün Kaldı ({staj['end']})",
+                "title":     f"{staj['name']} Aktif — {days_left} Gün Kaldı",
                 "detail":    (
                     f"Aktif staj dönemi: {staj['start']} → {staj['end']}. "
-                    f"Geçmiş veriye göre bu dönemde +{staj['vm_burst']} VM, "
-                    f"CPU +{staj['cpu_extra']:.0f}%, Bellek +{staj['mem_extra']:.0f}% "
-                    f"yük artışı ve hata oranında +{staj['error_extra']:.1f}% artış beklenir."
+                    f"Beklenen ek yük: +{staj['vcpu_extra']} vCPU, "
+                    f"Bellek +{staj['mem_extra']:.0f}%, Hata +{staj['error_extra']:.1f}%."
                 ),
                 "actions": [
                     "Nova scheduler ağırlıklarını ve host aggregate'leri kontrol edin.",
-                    f"Keystone proje kotalarını doğrulayın — {staj['vm_burst']} ek VM için yeterli kota var mı?",
-                    "Quota exceeded ve resource_exhausted hatalarındaki artış staj kaynaklı olabilir; alarm eşiklerini geçici ayarlayın.",
-                    "Staj bitiminde oluşturulan VM'lerin temizlenmesi için kullanıcılara bildirim gönderin.",
+                    f"Keystone proje kotalarını doğrulayın — +{staj['vcpu_extra']} ek vCPU için yeterli mi?",
+                    "Quota exceeded ve resource_exhausted hatalarındaki artışları izleyin.",
+                    "Staj bitiminde VM'lerin temizlenmesi için kullanıcılara bildirim gönderin.",
                 ],
                 "timestamp": ts_now,
             })
@@ -296,17 +327,15 @@ def _staj_recommendations(ts_now: str) -> list[dict]:
             recs.append({
                 "severity":  "info",
                 "category":  "STAJ",
-                "title":     f"{staj['name']} {days_to} Gün Sonra Başlıyor ({staj['start']})",
+                "title":     f"{staj['name']} {days_to} Gün Sonra Başlıyor",
                 "detail":    (
-                    f"Geçmiş dönem verilerine göre {staj['name']} başladığında "
-                    f"~{staj['vm_burst']} ek VM, CPU'da +{staj['cpu_extra']:.0f}%, "
-                    f"Bellekte +{staj['mem_extra']:.0f}% artış beklenir. "
+                    f"{staj['name']} başladığında ~+{staj['vcpu_extra']} vCPU, "
+                    f"Bellek +{staj['mem_extra']:.0f}% artış beklenir. "
                     f"Hazırlık için {days_to} gününüz var."
                 ),
                 "actions": [
-                    "Mevcut compute kapasitesinin staj yükünü kaldırıp kaldıramayacağını hesaplayın.",
-                    "Staj kullanıcı hesaplarını ve proje kotalarını staj başlamadan önce yapılandırın.",
-                    "Log ve alarm sistemlerinin staj dönemine göre ayarlandığından emin olun.",
+                    "Mevcut vCPU kapasitesinin staj yükünü kaldırıp kaldıramayacağını hesaplayın.",
+                    "Staj kullanıcı hesaplarını ve kotalarını staj başlamadan önce yapılandırın.",
                     "Gerekirse yeni donanım alımı için satın alma sürecini başlatın.",
                 ],
                 "timestamp": ts_now,
@@ -315,28 +344,28 @@ def _staj_recommendations(ts_now: str) -> list[dict]:
     return recs
 
 
-# ── Hata özeti (LLM ve raporlar için) ────────────────────────────────────────
+# ── Hata özeti (LLM için) ─────────────────────────────────────────────────────
 
 def build_error_summary(feature_df: pd.DataFrame) -> dict:
-    """
-    Son 7 gün ile önceki 7 günü karşılaştıran yapılandırılmış hata özeti.
-    LLM prompt'una ve dashboard'a beslenir.
-    """
     if len(feature_df) < 336:
         return {}
-
     prev_week = feature_df.iloc[-336:-168]
     last_week = feature_df.iloc[-168:]
 
     error_cols = {
-        "timeout_count":            "Timeout",
-        "db_connection_count":      "DB Bağlantı",
-        "resource_exhausted_count": "Kaynak Yetersizliği",
-        "quota_exceeded_count":     "Kota Aşımı",
-        "auth_failure_count":       "Kimlik Doğrulama",
-        "network_error_count":      "Ağ Hatası",
-        "scheduler_error_count":    "Zamanlayıcı",
-        "critical_count":           "CRITICAL Log",
+        "timeout_count":              "Timeout",
+        "db_connection_count":        "DB Bağlantı",
+        "resource_exhausted_count":   "Kaynak Tükenmesi",
+        "quota_exceeded_count":       "Kota Aşımı",
+        "auth_failure_count":         "Kimlik Doğrulama",
+        "network_error_count":        "Ağ Hatası",
+        "scheduler_error_count":      "Zamanlayıcı",
+        "slow_response_count":        "Yavaş Yanıt",
+        "memory_pressure_count":      "Bellek Baskısı",
+        "connection_pool_warn_count": "Bağlantı Havuzu",
+        "scheduler_degradation_count":"Zamanlayıcı Bozulma",
+        "cascade_indicator_count":    "Cascade Göstergesi",
+        "critical_count":             "CRITICAL Log",
     }
 
     summary = {}
@@ -352,25 +381,20 @@ def build_error_summary(feature_df: pd.DataFrame) -> dict:
             "change_pct": round(change, 1),
             "high":       change >= 50 or last_sum > 500,
         }
-
     return summary
 
 
 # ── Çıktı fonksiyonları ───────────────────────────────────────────────────────
 
-def _save_recommendations(recs: list, feature_df: pd.DataFrame, cap_results: dict) -> None:
+def _save_recommendations(recs, feature_df, cap_results):
     from src.models.capacity_predictor import predict_days_to_threshold
 
-    # Kapasite özeti
     cap_summary = {}
-    for col in ["cpu_usage_percent", "memory_usage_percent", "disk_usage_percent"]:
-        info = predict_days_to_threshold(feature_df, cap_results, col)
-        cap_summary[col] = info
+    for col in ["vcpu_usage_percent", "memory_usage_percent", "disk_usage_percent"]:
+        cap_summary[col] = predict_days_to_threshold(feature_df, cap_results, col)
 
-    # Hata özeti
     err_summary = build_error_summary(feature_df)
 
-    # JSON
     out_json = os.path.join(RESULTS_DIR, "reports", "recommendations.json")
     with open(out_json, "w", encoding="utf-8") as f:
         json.dump({
@@ -379,7 +403,6 @@ def _save_recommendations(recs: list, feature_df: pd.DataFrame, cap_results: dic
             "error_summary":    err_summary,
         }, f, ensure_ascii=False, indent=2)
 
-    # TXT raporu
     out_txt = os.path.join(RESULTS_DIR, "reports", "recommendations.txt")
     _write_txt_report(out_txt, recs, cap_summary, err_summary)
 
@@ -389,7 +412,7 @@ def _save_recommendations(recs: list, feature_df: pd.DataFrame, cap_results: dic
 
 def _write_txt_report(path, recs, cap_summary, err_summary):
     labels = {
-        "cpu_usage_percent":    "CPU   ",
+        "vcpu_usage_percent":   "vCPU  ",
         "memory_usage_percent": "Bellek",
         "disk_usage_percent":   "Disk  ",
     }
@@ -408,19 +431,14 @@ def _write_txt_report(path, recs, cap_summary, err_summary):
             days = info.get("days_to_threshold")
             stb  = info.get("stable", False)
             trend = info.get("daily_trend", 0)
-
-            if stb or days is None:
-                status = "Kararlı trend (>180 gün)"
-            else:
-                status = f"Tahmini eşik: {est} (~{int(days)} gün)"
-
+            status = "Kararlı trend (>180 gün)" if (stb or days is None) else f"Tahmini eşik: {est} (~{int(days)} gün)"
             f.write(f"  {lbl}: %{cur:.1f} → Eşik %{thr} | +{trend:.3f}%/gün | {status}\n")
 
-        f.write("\n── 7 GÜNLÜK HATA ÖZETİ ─────────────────────────────────────────\n")
+        f.write("\n── 7 GÜNLÜK LOG ÖZETİ ──────────────────────────────────────────\n")
         for label, data in err_summary.items():
-            flag = " ⚠️" if data.get("high") else ""
-            f.write(f"  {label:25s}: {data['last_7d']:6,} kez  "
-                    f"({data['change_pct']:+.0f}% önceki haftaya göre){flag}\n")
+            flag = " !!!" if data.get("high") else ""
+            f.write(f"  {label:28s}: {data['last_7d']:6,} kez  "
+                    f"({data['change_pct']:+.0f}% değişim){flag}\n")
 
         f.write("\n── ÖNERİLER ──────────────────────────────────────────────────────\n")
         for i, rec in enumerate(recs, 1):
@@ -432,15 +450,15 @@ def _write_txt_report(path, recs, cap_summary, err_summary):
                 f.write(f"       {j}. {act}\n")
 
 
-def _print_recommendations(recs: list) -> None:
+def _print_recommendations(recs):
     print("\n" + "=" * 70)
     print("  OPERASYONEL ÖNERİLER")
     print("=" * 70)
-    icons = {"critical": "🔴", "warning": "🟡", "info": "🔵"}
+    icons = {"critical": "[KRİTİK]", "warning": "[UYARI]", "info": "[BİLGİ]"}
     for i, rec in enumerate(recs, 1):
         sev  = _SEVERITY_LABELS.get(rec["severity"], rec["severity"].upper())
-        icon = icons.get(rec["severity"], "🔵")
-        print(f"\n{icon} [{i}] [{sev}] {rec['category']} — {rec['title']}")
+        icon = icons.get(rec["severity"], "[BİLGİ]")
+        print(f"\n{icon} [{i}] {rec['category']} — {rec['title']}")
         print(f"    {rec['detail']}")
         print("    Aksiyonlar:")
         for j, act in enumerate(rec.get("actions", []), 1):

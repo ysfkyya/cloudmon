@@ -1,16 +1,11 @@
 """
 Çoklu LLM Proaktif Öneri Modülü.
 
-Metrik özeti + kapasite tahmini (bitiş tarihleri) + SHAP top özellikleri
-+ haftalık hata karşılaştırması + staj dönemi bilgisi →
-Claude (Anthropic) ve GPT-4o (OpenAI) modeline aynı prompt gönderilir,
-yanıtlar yan yana karşılaştırılır.
+Metrik analizi + kapasite tahmini + log pipeline içgörüleri (anomaliler,
+ön-arıza örüntüleri, trend analizi, servis sağlık durumu) → LLM'e gönderilir.
 
-Kullanım:
-    from src.recommendations.llm_advisor import LLMAdvisor
-    advisor = LLMAdvisor(anthropic_key="...", openai_key="...")
-    result  = advisor.get_recommendations(feature_df, shap_health, shap_capacity,
-                                          capacity_results=..., recommendations=...)
+Her iki taraf da (Claude + GPT-4o) aynı prompt'u alır; yanıtlar karşılaştırılır.
+Önemli: Prompt hem metriklerden hem de log analizinden elde edilen çıkarımları içerir.
 """
 
 import os
@@ -19,8 +14,6 @@ from datetime import datetime
 import numpy as np
 import pandas as pd
 
-
-# ── Model tanımları ────────────────────────────────────────────────────────────
 
 PROVIDERS = {
     "claude": {
@@ -36,166 +29,234 @@ PROVIDERS = {
 }
 
 
-# ── Prompt oluşturucu ─────────────────────────────────────────────────────────
-
 def build_prompt(context: dict) -> str:
     """
     Zenginleştirilmiş sistem bağlamını LLM prompt'una dönüştürür.
+    Hem metrik hemde log analizi çıkarımları dahildir.
 
-    context anahtarları
-    -------------------
-    metric_summary    : son 24s ort/maks metrikler
-    shap_features     : top SHAP özelliği listesi
-    error_summary     : haftalık hata karşılaştırması
-    capacity_dates    : her kaynak için bitiş tarihi + günler
-    staj_status       : aktif/yaklaşan staj dönemleri
-    recommendations   : rule-engine'den gelen yapılandırılmış öneriler
-    current_date      : mevcut tarih (str)
+    context anahtarları:
+      metric_summary      : son 24s ort/maks metrikler
+      capacity_dates      : her kaynak için eşik tarihi + günler
+      staj_status         : aktif/yaklaşan staj dönemleri
+      error_summary       : 7 günlük log karşılaştırması
+      shap_features       : top SHAP özelliği listesi
+      log_anomalies_24h   : son 24s anomali tespitleri
+      log_trends_7d       : 7g trend değişimleri
+      prefailure_patterns : tarihsel ön-arıza örüntüleri
+      cascade_events      : cascade riski dönemleri
+      service_health      : servis sağlık durumu (log bazlı)
+      recommendations     : kural motoru önerileri
+      current_date        : mevcut tarih
     """
-    ms   = context.get("metric_summary", {})
-    shap = context.get("shap_features", [])
-    err  = context.get("error_summary", {})
-    cdates = context.get("capacity_dates", {})
-    staj = context.get("staj_status", {})
-    recs = context.get("recommendations", [])
-    dt   = context.get("current_date", datetime.now().strftime("%Y-%m-%d"))
+    ms      = context.get("metric_summary", {})
+    cdates  = context.get("capacity_dates", {})
+    staj    = context.get("staj_status", {})
+    err     = context.get("error_summary", {})
+    shap    = context.get("shap_features", [])
+    recs    = context.get("recommendations", [])
+    dt      = context.get("current_date", datetime.now().strftime("%Y-%m-%d"))
 
-    # SHAP satırları
-    shap_lines = "\n".join(
-        f"  {i+1}. {f['feature']} (önem: {f['importance']:.3f})"
-        for i, f in enumerate(shap[:8])
-    ) or "  (SHAP verisi yok)"
+    # Log analizi çıkarımları
+    log_anom     = context.get("log_anomalies_24h", [])
+    log_trends   = context.get("log_trends_7d", [])
+    log_patterns = context.get("prefailure_patterns", [])
+    cascades     = context.get("cascade_events", [])
+    svc_health   = context.get("service_health", {})
 
-    # Kapasite bitiş tarihleri
-    cap_lines = []
+    # ── Kapasite satırları ────────────────────────────────────────────────────
     labels_map = {
-        "cpu_usage_percent":    "CPU  ",
+        "vcpu_usage_percent":   "vCPU  ",
         "memory_usage_percent": "Bellek",
         "disk_usage_percent":   "Disk  ",
     }
+    cap_lines = []
     for col, info in cdates.items():
         lbl   = labels_map.get(col, col)
         cur   = info.get("current_value", 0)
         thr   = info.get("threshold", 90)
         trend = info.get("daily_trend", 0)
         if info.get("stable"):
-            cap_lines.append(f"  {lbl}: %{cur:.1f} → Kararlı trend (>180 gün, +{trend:.3f}%/gün)")
+            cap_lines.append(f"  {lbl}: %{cur:.1f} → Kararlı (>180 gün, +{trend:.3f}%/gün)")
         elif info.get("estimated_date"):
             days = int(info.get("days_to_threshold", 0))
             cap_lines.append(
-                f"  {lbl}: %{cur:.1f} → Eşik %{thr} | "
-                f"Tahmini dolum: {info['estimated_date']} (~{days} gün) | "
-                f"Günlük artış: +{trend:.3f}%"
+                f"  {lbl}: %{cur:.1f} → Eşik %{thr} | Tahmini dolum: "
+                f"{info['estimated_date']} (~{days} gün) | +{trend:.3f}%/gün"
             )
         else:
             cap_lines.append(f"  {lbl}: %{cur:.1f} → Eşik %{thr} (yetersiz veri)")
     cap_block = "\n".join(cap_lines) or "  (Kapasite verisi yok)"
 
-    # Haftalık hata özeti
-    err_lines = []
-    for label, data in err.items():
-        flag = " ⚠ YÜKSEK" if data.get("high") else ""
-        err_lines.append(
-            f"  {label:28s}: Son 7g={data['last_7d']:6,}  "
-            f"Önceki 7g={data['prev_7d']:6,}  "
-            f"Değişim={data['change_pct']:+.0f}%{flag}"
-        )
-    err_block = "\n".join(err_lines) or "  (Hata verisi yok)"
-
-    # Staj durumu
+    # ── Staj durumu ───────────────────────────────────────────────────────────
     if staj.get("active"):
         s = staj["active"]
         staj_block = (
-            f"  ⚡ AKTİF STAJ: {s['name']} ({s['start']} – {s['end']}, "
+            f"  AKTİF STAJ: {s['name']} ({s['start']} – {s['end']}, "
             f"{s.get('days_left', '?')} gün kaldı)\n"
-            f"  Beklenen etki: +{s.get('vm_burst', '?')} VM, "
-            f"CPU +{s.get('cpu_extra', '?')}%, Bellek +{s.get('mem_extra', '?')}%, "
-            f"Hata +{s.get('error_extra', '?')}%"
+            f"  Beklenen etki: +{s.get('vcpu_extra', '?')} vCPU, "
+            f"Bellek +{s.get('mem_extra', '?')}%, Hata +{s.get('error_extra', '?')}%"
         )
     elif staj.get("upcoming"):
         s = staj["upcoming"]
         staj_block = (
-            f"  📅 YAKLAŞAN STAJ: {s['name']} başlangıç: {s['start']} "
-            f"({s.get('days_to', '?')} gün sonra)\n"
-            f"  Planlanan etki: +{s.get('vm_burst', '?')} VM, "
-            f"CPU +{s.get('cpu_extra', '?')}%, Bellek +{s.get('mem_extra', '?')}%"
+            f"  YAKLAŞAN STAJ: {s['name']} ({s.get('days_to', '?')} gün sonra)\n"
+            f"  Planlanan etki: +{s.get('vcpu_extra', '?')} vCPU, "
+            f"Bellek +{s.get('mem_extra', '?')}%"
         )
     else:
         staj_block = "  Aktif veya yaklaşan staj dönemi yok."
 
-    # Rule-engine önerileri özeti
+    # ── Log anomali satırları (son 24 saat) ───────────────────────────────────
+    anom_lines = []
+    for a in log_anom[:6]:
+        warn_tag = "[ERKEN UYARI]" if a.get("is_warning") else "[HATA]"
+        anom_lines.append(
+            f"  {warn_tag} {a['label']}: {a['current_mean']:.0f} adet/saat "
+            f"(normal: {a['baseline']:.0f}) — z-skor: {a['max_zscore']:.1f}"
+        )
+    anom_block = "\n".join(anom_lines) or "  Son 24 saatte anlamlı anomali tespit edilmedi."
+
+    # ── Log trend satırları (7 gün) ───────────────────────────────────────────
+    trend_lines = []
+    for t in log_trends[:6]:
+        dir_icon = "↑" if t["direction"] == "increasing" else "↓" if t["direction"] == "decreasing" else "→"
+        warn_tag = "[⚠]" if t.get("is_warning") else "   "
+        trend_lines.append(
+            f"  {warn_tag} {t['label']}: {dir_icon} {t['change_pct']:+.0f}% "
+            f"({t['prev_7d']:.0f}→{t['last_7d']:.0f} adet)"
+        )
+    trend_block = "\n".join(trend_lines) or "  Log trendi değişimi yok."
+
+    # ── Ön-arıza örüntüleri ───────────────────────────────────────────────────
+    pattern_lines = []
+    for p in log_patterns[:5]:
+        pattern_lines.append(
+            f"  '{p['label']}': Arızadan ~{p['lead_time_hours']:.0f} saat önce "
+            f"+{p['avg_increase_pct']:.0f}% artış gösterir "
+            f"(güven: {p['confidence']:.0%}, {p['observed_times']} olay)"
+        )
+    pattern_block = "\n".join(pattern_lines) or "  Yeterli tarihsel örüntü çıkarılamadı."
+
+    # ── Cascade uyarısı ───────────────────────────────────────────────────────
+    if cascades:
+        c = cascades[-1]
+        cascade_block = (
+            f"  YAKINDA CASCADE: {c['start']} tarihinde {c['duration_h']:.1f} saatlik "
+            f"çok servisli bozulma tespit edildi."
+        )
+    else:
+        cascade_block = "  Yakın dönemde cascade riski tespit edilmedi."
+
+    # ── Servis sağlık durumu ──────────────────────────────────────────────────
+    health_map = {"critical": "KRİTİK", "degraded": "BOZUK", "warning": "UYARI", "healthy": "SAĞLIKLI"}
+    health_lines = [
+        f"  {svc.upper():18s}: {health_map.get(state, state.upper())}"
+        for svc, state in svc_health.items()
+    ]
+    health_block = "\n".join(health_lines) or "  Servis sağlık verisi yok."
+
+    # ── SHAP satırları ────────────────────────────────────────────────────────
+    shap_lines = "\n".join(
+        f"  {i+1}. {f['feature']} (önem: {f['importance']:.3f})"
+        for i, f in enumerate(shap[:8])
+    ) or "  (SHAP verisi yok)"
+
+    # ── Hata özeti ────────────────────────────────────────────────────────────
+    err_lines = []
+    for label, data in err.items():
+        flag = " !!! YÜKSEK" if data.get("high") else ""
+        err_lines.append(
+            f"  {label:28s}: Son7g={data['last_7d']:5,}  "
+            f"Önceki7g={data['prev_7d']:5,}  {data['change_pct']:+.0f}%{flag}"
+        )
+    err_block = "\n".join(err_lines) or "  (Hata verisi yok)"
+
+    # ── Kural motoru özeti ────────────────────────────────────────────────────
     rec_lines = []
     for r in recs[:5]:
         rec_lines.append(f"  [{r.get('severity','?').upper()}] {r.get('category','')}: {r.get('title','')}")
     rec_block = "\n".join(rec_lines) or "  (Otomatik öneri yok)"
 
     return f"""Sen bir bulut altyapısı (OpenStack) uzman danışmanısın.
-Aşağıdaki gerçek zamanlı sistem verilerini analiz ederek SOMUT ve EYLEMSELöneriler sun.
+Aşağıdaki gerçek zamanlı sistem verileri hem metrik analizinden hem de çok aşamalı
+log pipeline analizinden elde edilmiştir. Bu bütünleşik veriyi kullanarak SOMUT,
+EYLEMSELve proaktif öneriler sun.
 
 === MEVCUT TARİH: {dt} ===
 
 ━━━ SON 24 SAATLİK METRİK ÖZETİ ━━━
-CPU Kullanımı       : Ort %{ms.get('cpu_mean', 0):.1f}  |  Maks %{ms.get('cpu_max', 0):.1f}
-Bellek Kullanımı    : Ort %{ms.get('mem_mean', 0):.1f}  |  Maks %{ms.get('mem_max', 0):.1f}
-Disk Kullanımı      : Ort %{ms.get('disk_mean', 0):.1f}  |  Maks %{ms.get('disk_max', 0):.1f}
-API Gecikmesi       : Ort {ms.get('latency_mean', 0):.0f} ms  |  Maks {ms.get('latency_max', 0):.0f} ms
-Hata Oranı          : Ort %{ms.get('error_mean', 0):.2f}  |  Maks %{ms.get('error_max', 0):.2f}
-Timeout (son 6s)    : {ms.get('timeout_6h', 0):.0f}
-DB Bağlantı (son 6s): {ms.get('db_conn_6h', 0):.0f}
-Kota Aşımı (son 6s) : {ms.get('quota_6h', 0):.0f}
-Kritik Log (son 6s) : {ms.get('critical_6h', 0):.0f}
-VM Sayısı           : {ms.get('vm_count', 0):.0f}
+vCPU Kullanımı       : {ms.get('vcpu_used', 0):.0f} / {ms.get('vcpu_total', 2000):.0f}  (%{ms.get('vcpu_mean', 0):.1f} ort, %{ms.get('vcpu_max', 0):.1f} maks)  |  VM: {ms.get('vm_count', 0):.0f}
+Bellek Kullanımı     : {ms.get('mem_used_gb', 0):.0f} / {ms.get('mem_total_gb', 8000):.0f} GB  (%{ms.get('mem_mean', 0):.1f} ort, %{ms.get('mem_max', 0):.1f} maks)
+Disk Kullanımı       : {ms.get('disk_used_tb', 0):.0f} / {ms.get('disk_total_tb', 500):.0f} TB  (%{ms.get('disk_mean', 0):.1f} ort, %{ms.get('disk_max', 0):.1f} maks)
+API Gecikmesi        : Ort {ms.get('latency_mean', 0):.0f} ms  |  Maks {ms.get('latency_max', 0):.0f} ms
+Hata Oranı           : Ort %{ms.get('error_mean', 0):.2f}  |  Maks %{ms.get('error_max', 0):.2f}
 
-━━━ KAPASİTE DOLUM TAHMİNİ (30 günlük medyan trend) ━━━
+━━━ KAPASİTE DOLUM TAHMİNİ (ML modeli, 30g medyan trend) ━━━
 {cap_block}
 
 ━━━ STAJ DÖNEMİ DURUMU ━━━
 {staj_block}
 
-━━━ 7 GÜNLÜK HATA KARŞILAŞTIRMASI ━━━
+━━━ LOG ANALİZİ — SON 24 SAAT ANOMALİLERİ ━━━
+(z-skor tabanlı anormal yoğunlaşmalar — [ERKEN UYARI]=problem öncesi sinyal)
+{anom_block}
+
+━━━ LOG ANALİZİ — 7 GÜNLÜK TREND DEĞİŞİMİ ━━━
+([⚠] = proaktif erken uyarı log tipi)
+{trend_block}
+
+━━━ TARİHSEL ÖN-ARIZA ÖRÜNTÜLER (Log Pipeline Çıkarımı) ━━━
+(Geçmiş {len(log_patterns)} incident analiz edilerek çıkarılan log imzaları)
+{pattern_block}
+
+━━━ CASCADE RİSKİ ━━━
+{cascade_block}
+
+━━━ SERVİS SAĞLIK DURUMU (Log Bazlı, Son 24s) ━━━
+{health_block}
+
+━━━ 7 GÜNLÜK LOG KARŞILAŞTIRMASI ━━━
 {err_block}
 
-━━━ SHAP — EN ETKİLİ ÖZELLIKLER (sağlık riski modeli) ━━━
+━━━ SHAP — KAPASİTE TAHMİNİNDE EN ETKİLİ ÖZELLİKLER ━━━
 {shap_lines}
 
-━━━ OTOMATİK KURAL MOTORU ÖNERİLERİ ━━━
+━━━ OTOMATİK KURAL MOTORU ÖNERİLERİ (Özet) ━━━
 {rec_block}
 
 ━━━ GÖREVİN ━━━
-Yukarıdaki verileri bütünsel olarak değerlendirerek:
+Yukarıdaki metrik VE log analizi verilerini birlikte değerlendirerek:
 
-1. KAPASİTE: CPU, Bellek, Disk için tahmini dolum tarihlerine göre aciliyet sıralı
-   planlama öner. "Mevcut trend devam ederse X tarihi Y kaynağı dolacak → şu adımlar
-   alınmalı" formatında yaz.
+1. ERKEN UYARI DEĞERLENDİRMESİ: Log anomalileri ve ön-arıza örüntüleri ışığında
+   sistemin önümüzdeki 24-72 saatte hangi risk altında olduğunu açıkla. Hangi
+   log sinyali ne tür bir soruna işaret ediyor?
 
-2. STAJ HAZIRLIĞI: Aktif/yaklaşan staj dönemini göz önünde bulundurarak kota,
-   zamanlayıcı ve alarm eşikleri için spesifik öneriler sun.
+2. KAPASİTE PLANLAMA: vCPU/Bellek/Disk için tahmini dolum tarihlerine göre aciliyet
+   sıralı önlem öner. "X tarihi Y kaynağı dolacak → şu adımlar alınmalı" formatında.
 
-3. HATA TRENDLERI: Artan hata türlerine karşı uygulanabilir 2-3 OpenStack komutu
-   veya yapılandırma adımı ver.
+3. LOG ÖRÜNTÜSÜ ANALİZİ: Tarihsel ön-arıza örüntülerinden (örneğin hangi log tipi
+   arızadan kaç saat önce artıyor) çıkarılan en önemli 2-3 içgörüyü paylaş.
 
-4. İZLEME ÖNCELİKLERİ: Önümüzdeki 7 gün için hangi 3 metriği/log türünü önce
-   izlemek gerektiğini belirt ve neden.
+4. SERVİS ÖNCELİKLERİ: Bozuk/Kritik servisler için uygulanabilir OpenStack komutu
+   veya yapılandırma adımı ver (nova, keystone, neutron, cinder komutları).
 
-5. IÇGÖRÜ: "Bu sistem genellikle X koşulda Y hatasına giriyor" formatında
-   bir örüntü içgörüsü paylaş.
+5. STAJ HAZIRLIĞI: Aktif/yaklaşan staj dönemini göz önünde bulundurarak kota ve
+   kaynak planlaması için spesifik öneriler sun.
 
-Yanıtını TÜRKÇE ver. Teknik olmayan jargondan kaçın ama OpenStack servis isimlerini
-(Nova, Keystone, Neutron, Cinder) kullan. Madde madde, kısa ve net ol.
-Toplam yanıt uzunluğu 600 kelimeyi geçmesin."""
+Yanıtını TÜRKÇE ver. Teknik jargondan kaçın ama OpenStack servis adlarını kullan.
+Madde madde, kısa ve net ol. Toplam yanıt 700 kelimeyi geçmesin."""
 
-
-# ── Bağlam çıkarıcı ───────────────────────────────────────────────────────────
 
 def extract_context(
     feature_df: pd.DataFrame,
-    shap_health: dict,
-    shap_capacity: dict = None,
+    shap_capacity: dict,
     capacity_results: dict = None,
     recommendations: list = None,
+    log_insights: dict = None,
 ) -> dict:
     """
-    feature_df, model çıktıları ve öneri listesinden zengin prompt bağlamı hazırlar.
+    feature_df, model çıktıları, log pipeline sonuçları ve öneri listesinden
+    zengin prompt bağlamı hazırlar.
     """
     from config import THRESHOLDS, STAJ_PERIODS
     from src.models.capacity_predictor import predict_days_to_threshold
@@ -210,30 +271,36 @@ def extract_context(
             return 0.0
 
     metric_summary = {
-        "cpu_mean":     _safe("cpu_usage_percent",    np.mean),
-        "cpu_max":      _safe("cpu_usage_percent",    np.max),
-        "mem_mean":     _safe("memory_usage_percent", np.mean),
-        "mem_max":      _safe("memory_usage_percent", np.max),
-        "disk_mean":    _safe("disk_usage_percent",   np.mean),
-        "disk_max":     _safe("disk_usage_percent",   np.max),
-        "latency_mean": _safe("api_latency_ms",       np.mean),
-        "latency_max":  _safe("api_latency_ms",       np.max),
-        "error_mean":   _safe("error_rate_percent",   np.mean),
-        "error_max":    _safe("error_rate_percent",   np.max),
-        "timeout_6h":   _safe("timeout_count",        lambda c: c.tail(6).sum()),
-        "db_conn_6h":   _safe("db_connection_count",  lambda c: c.tail(6).sum()),
-        "quota_6h":     _safe("quota_exceeded_count", lambda c: c.tail(6).sum()),
-        "critical_6h":  _safe("critical_count",       lambda c: c.tail(6).sum()),
-        "vm_count":     _safe("vm_count",             lambda c: c.iloc[-1]),
+        "vcpu_mean":      _safe("vcpu_usage_percent",    np.mean),
+        "vcpu_max":       _safe("vcpu_usage_percent",    np.max),
+        "vcpu_used":      _safe("vcpu_used",             lambda c: c.iloc[-1]),
+        "vcpu_total":     _safe("vcpu_total",            lambda c: c.iloc[-1]),
+        "mem_mean":       _safe("memory_usage_percent",  np.mean),
+        "mem_max":        _safe("memory_usage_percent",  np.max),
+        "mem_used_gb":    _safe("memory_used_gb",        lambda c: c.iloc[-1]),
+        "mem_total_gb":   _safe("memory_total_gb",       lambda c: c.iloc[-1]),
+        "disk_mean":      _safe("disk_usage_percent",    np.mean),
+        "disk_max":       _safe("disk_usage_percent",    np.max),
+        "disk_used_tb":   _safe("disk_used_tb",          lambda c: c.iloc[-1]),
+        "disk_total_tb":  _safe("disk_total_tb",         lambda c: c.iloc[-1]),
+        "latency_mean":   _safe("api_latency_ms",        np.mean),
+        "latency_max":    _safe("api_latency_ms",        np.max),
+        "error_mean":     _safe("error_rate_percent",    np.mean),
+        "error_max":      _safe("error_rate_percent",    np.max),
+        "vm_count":       _safe("vm_count",              lambda c: c.iloc[-1]),
     }
 
-    # SHAP özellikler
-    shap_features = (shap_health or {}).get("top_features", [])[:8]
+    # SHAP top özellikler
+    shap_features = []
+    for key, val in (shap_capacity or {}).items():
+        if "24h" in key and val.get("top_features"):
+            shap_features = val["top_features"][:8]
+            break
 
     # Kapasite bitiş tarihleri
     cap_results_obj = capacity_results or {}
     capacity_dates  = {}
-    for col in ["cpu_usage_percent", "memory_usage_percent", "disk_usage_percent"]:
+    for col in ["vcpu_usage_percent", "memory_usage_percent", "disk_usage_percent"]:
         capacity_dates[col] = predict_days_to_threshold(feature_df, cap_results_obj, col)
 
     # Haftalık hata özeti
@@ -246,36 +313,41 @@ def extract_context(
         s_start = pd.Timestamp(staj["start"])
         s_end   = pd.Timestamp(staj["end"])
         if s_start <= current_ts <= s_end:
-            staj_status["active"] = {
-                **staj,
-                "days_left": max((s_end - current_ts).days, 0),
-            }
+            staj_status["active"] = {**staj, "days_left": max((s_end - current_ts).days, 0)}
             break
         elif s_start > current_ts and (s_start - current_ts).days <= 45:
-            staj_status["upcoming"] = {
-                **staj,
-                "days_to": (s_start - current_ts).days,
-            }
+            staj_status["upcoming"] = {**staj, "days_to": (s_start - current_ts).days}
+
+    # Log pipeline içgörüleri
+    li = log_insights or {}
+    log_anomalies_24h   = li.get("anomalies_last_24h", [])
+    log_trends_7d       = li.get("log_trends_7d", [])
+    prefailure_patterns = li.get("prefailure_patterns", [])
+    cascade_events      = li.get("cascade_events_recent", [])
+    service_health      = li.get("service_health", {})
 
     return {
-        "metric_summary":  metric_summary,
-        "shap_features":   shap_features,
-        "error_summary":   error_summary,
-        "capacity_dates":  capacity_dates,
-        "staj_status":     staj_status,
-        "recommendations": recommendations or [],
-        "current_date":    str(current_ts)[:10],
+        "metric_summary":      metric_summary,
+        "shap_features":       shap_features,
+        "error_summary":       error_summary,
+        "capacity_dates":      capacity_dates,
+        "staj_status":         staj_status,
+        "recommendations":     recommendations or [],
+        "current_date":        str(current_ts)[:10],
+        "log_anomalies_24h":   log_anomalies_24h,
+        "log_trends_7d":       log_trends_7d,
+        "prefailure_patterns": prefailure_patterns,
+        "cascade_events":      cascade_events,
+        "service_health":      service_health,
     }
 
-
-# ── LLM çağrıları ─────────────────────────────────────────────────────────────
 
 def _call_claude(prompt: str, api_key: str) -> str:
     import anthropic
     client = anthropic.Anthropic(api_key=api_key)
     msg = client.messages.create(
         model=PROVIDERS["claude"]["model_id"],
-        max_tokens=1500,
+        max_tokens=1800,
         messages=[{"role": "user", "content": prompt}],
     )
     return msg.content[0].text
@@ -286,13 +358,11 @@ def _call_openai(prompt: str, api_key: str) -> str:
     client = OpenAI(api_key=api_key)
     resp = client.chat.completions.create(
         model=PROVIDERS["openai"]["model_id"],
-        max_tokens=1500,
+        max_tokens=1800,
         messages=[{"role": "user", "content": prompt}],
     )
     return resp.choices[0].message.content
 
-
-# ── Ana sınıf ─────────────────────────────────────────────────────────────────
 
 class LLMAdvisor:
     def __init__(self, anthropic_key: str = "", openai_key: str = ""):
@@ -301,32 +371,32 @@ class LLMAdvisor:
             "openai": openai_key    or os.environ.get("OPENAI_API_KEY",    ""),
         }
 
-    def available_providers(self) -> list[str]:
+    def available_providers(self) -> list:
         return [p for p, k in self.keys.items() if k]
 
     def get_recommendations(
         self,
         feature_df: pd.DataFrame,
-        shap_health: dict,
-        shap_capacity: dict = None,
+        shap_capacity: dict,
         capacity_results: dict = None,
         recommendations: list = None,
+        log_insights: dict = None,
     ) -> dict:
         """
         Tüm aktif sağlayıcılara zenginleştirilmiş prompt gönderir.
-        Döndürür: {"prompt": ..., "context": ..., "responses": {"claude": {...}, "openai": {...}}}
+        Prompt hem metrik hem de log analizi çıkarımlarını içerir.
         """
         context = extract_context(
             feature_df,
-            shap_health,
-            shap_capacity    or {},
+            shap_capacity,
             capacity_results or {},
             recommendations  or [],
+            log_insights     or {},
         )
         prompt = build_prompt(context)
 
-        results = {}
-        callers = {"claude": _call_claude, "openai": _call_openai}
+        results  = {}
+        callers  = {"claude": _call_claude, "openai": _call_openai}
 
         for provider, fn in callers.items():
             key = self.keys.get(provider, "")
@@ -341,11 +411,7 @@ class LLMAdvisor:
                 text = fn(prompt, key)
                 results[provider] = {"status": "ok", "text": text, "error": ""}
             except Exception as e:
-                results[provider] = {
-                    "status": "error",
-                    "error":  str(e),
-                    "text":   "",
-                }
+                results[provider] = {"status": "error", "error": str(e), "text": ""}
 
         return {
             "prompt":    prompt,
