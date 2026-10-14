@@ -191,79 +191,97 @@ flowchart TD
 
 ---
 
-## 📥 Veri Katmanı — Kapasite Senaryosu
+## 📥 Veri Tanıtımı
 
-### Gerçekçi Büyüme Senaryosu
+### Ortam
 
-CloudMon gerçek bir üniversite OpenStack kümesinin 18 aylık evrimini simüle eder.
-Küme, öğrenci sanal makine taleplerinin sürekli büyümesiyle aşamalı olarak dolmaktadır:
+Bir üniversitenin OpenStack tabanlı özel bulut altyapısı. Akademisyenler, araştırma grupları
+ve staj öğrencileri bu küme üzerinde sanal makine (VM) çalıştırmaktadır. Küme yıllar içinde
+büyüyen bir taleple karşı karşıyadır — özellikle staj dönemlerinde VM sayısı ani sıçramalar yaşar.
 
-| Kaynak | Toplam Kapasite | Ocak 2025 | Temmuz 2026 | Dolum Tahmini |
+### Fiziksel Kaynaklar
+
+| Kaynak | Toplam Kapasite | Kritik Eşik | Ocak 2025 (başlangıç) | Temmuz 2026 (son) |
 |---|---|---|---|---|
-| **vCPU** | 2 000 vCPU | 30 vCPU (%1.5) | 1 598 vCPU (%79.9) | ~Mart 2027 (~8 ay) |
-| **Bellek** | 8 000 GB | 2 450 GB (%30.6) | 6 720 GB (%84.0) | ~Eylül 2026 (~2 ay) |
-| **Disk** | 500 TB | 140 TB (%28.0) | 390 TB (%78.0) | ~Kasım 2026 (~4 ay) |
+| **vCPU** | 2 000 vCPU | %90 → 1 800 vCPU | 30 vCPU (%1.5) | 1 598 vCPU (%79.9) |
+| **Bellek** | 8 000 GB RAM | %88 → 7 040 GB | 2 450 GB (%30.6) | 6 720 GB (%84.0) |
+| **Disk** | 500 TB | %85 → 425 TB | 140 TB (%28.0) | 390 TB (%78.0) |
 
-### İki Fazlı Büyüme Modeli
+18 aylık sürede vCPU %1.5'ten %79.9'a, bellek %30.6'dan %84.0'a çıkmıştır.
+Mevcut büyüme hızıyla devam edilirse bellek ve disk eşiklerine birkaç ay içinde ulaşılacaktır.
 
-vCPU büyümesi gerçekçi bir başlangıç hızlanması + olgunlaşma sürecini yansıtır:
+### Ölçülen Metrikler
 
-```
-Faz 1 (Oca 2025 – Oca 2026, 12 ay): Hızlı büyüme
-  → Başlangıç: 30 vCPU → 12. ay sonu: ~1 290 vCPU
-  → Ortalama: ~105 vCPU/ay
+Her saat başı aşağıdaki metrikler kaydedilir (13 140 saatlik gözlem, Ocak 2025 – Temmuz 2026):
 
-Faz 2 (Oca 2026 – Tem 2026, 6 ay): Yavaşlayan büyüme
-  → 1 290 vCPU → 1 598 vCPU
-  → Ortalama: ~52 vCPU/ay
-  → Mevcut hızla: 8 ay içinde 2 000 limit dolacak
-```
-
-Bellek ve disk bu vCPU trendi ile koreleli üretilir (bağımsız varyasyon eklenerek).
-
-Her metrik hem **mutlak değer** (GB, TB, vCPU adedi) hem de **yüzde** (%kullanım) olarak saklanır.
-
-### Simülasyon Kapsamı
-
-| Parametre | Değer |
+| Metrik | Açıklama |
 |---|---|
-| **Veri aralığı** | Ocak 2025 — Temmuz 2026 (18 ay) |
-| **Frekans** | Saatlik (her 60 dakikada bir nokta) |
-| **Toplam satır** | ~13 140 saatlik gözlem |
-| **Eğitim seti** | Oca 2025 — Mar 2026 (15 ay) |
-| **Test seti** | Nis 2026 — Haz 2026 (3 ay) |
-| **Tekrarlanabilirlik** | `SEED = 42` |
+| `vcpu_used` / `vcpu_usage_percent` | Nova scheduler'ın tahsis ettiği vCPU adedi ve oranı |
+| `memory_used_gb` / `memory_usage_percent` | Kullanılan RAM (GB) ve oranı |
+| `disk_used_tb` / `disk_usage_percent` | Kullanılan disk (TB) ve oranı |
+| `vm_count` | Aktif VM sayısı |
+| `api_latency_ms` | OpenStack API ortalama yanıt süresi (ms) |
+| `error_rate_percent` | Başarısız API isteği oranı (%) |
+| `network_in_mbps` / `network_out_mbps` | Küme ağ trafiği |
+| `api_requests_per_hour` | Saatlik toplam API isteği |
 
-### 15 Tanımlı Incident
+### 18 Aylık Dönem Takvimi
 
-| # | Olay | Dönem | vCPU Spike | Latency Spike |
+```
+2025                                                          2026
+Oca  Şub  Mar  Nis  May  Haz  Tem  Ağu  Eyl  Eki  Kas  Ara  Oca  Şub  Mar  Nis  May  Haz  Tem
+ |    |    |    |    |    |    |    |    |    |    |    |    |    |    |    |    |    |    |
+ [────────────────────── EĞİTİM SETİ (15 ay) ─────────────────────────────────][ TEST  ][
+      [KŞ25]         [──── YS25 ────]               [KŞ26]               [YS26]
+  ①②    ③      ④⑤   ⑥  ⑦  ⑧  ⑨         ⑩⑪   ⑫   ⑬   ⑭   ⑮
+```
+
+**Staj dönemleri** (KŞ=Kış Stajı, YS=Yaz Stajı):
+
+| Dönem | Tarih | Ek VM | vCPU Artışı | Bellek Artışı |
 |---|---|---|---|---|
-| 1 | Kış Stajı Keystone Kimlik Aşırı Yükü | Şub 2025 | +80 vCPU | +680 ms |
-| 2 | Nova Zamanlayıcı Tıkanması | Mar 2025 | +120 vCPU | +540 ms |
-| 3 | Disk G/Ç Yavaşlaması | May 2025 | +40 vCPU | +820 ms |
-| 4 | Yaz Stajı Pik — Kaynak Baskısı | Tem 2025 | +200 vCPU | +820 ms |
-| 5 | Yaz Stajı DB Bağlantı Havuzu Tükenmesi | Ağu 2025 | +90 vCPU | +1900 ms |
-| 6 | Bellek Baskısı — Hesaplama Grubu A | Eyl 2025 | +80 vCPU | +420 ms |
-| 7 | Disk Kapasitesi Kritik Seviyeye Yaklaşıyor | Eki 2025 | +40 vCPU | +260 ms |
-| 8 | Yüksek vCPU Kullanım Olayı | Kas 2025 | +320 vCPU | +920 ms |
-| 9 | Yılsonu Trafik Artışı | Ara 2025–Oca 2026 | +200 vCPU | +1100 ms |
-| 10 | Kış Stajı DB Bağlantı Fırtınası | Oca 2026 | +140 vCPU | +3400 ms |
-| 11 | Ağ Katmanı Kesintisi | Şub 2026 | +70 vCPU | +2600 ms |
-| 12 | API Gecikme Bozunumu | Mar 2026 | +170 vCPU | +2200 ms |
-| 13 | Zamanlayıcı Kaynak Yetersizliği | Nis 2026 | +230 vCPU | +1500 ms |
-| 14 | Çok Kaynaklı Basamaklı Arıza | May 2026 | +290 vCPU | +3000 ms |
-| 15 | Yaz Stajı Keystone Kimlik Doğrulama Krizi | Haz 2026 | +120 vCPU | +1800 ms |
+| Kış Stajı 2025 | 1 Şub – 14 Mar 2025 | +80 VM | +160 vCPU | +8% |
+| Yaz Stajı 2025 | 1 Haz – 12 Eyl 2025 | +185 VM | +370 vCPU | +15% |
+| Kış Stajı 2025–2026 | 10 Oca – 27 Şub 2026 | +105 VM | +210 vCPU | +10% |
+| Yaz Stajı 2026 | 1 Haz – 1 Tem 2026 | +155 VM | +310 vCPU | +13% |
 
-### Staj Dönemleri
+Staj dönemleri talep artışını, staj sonrası VM silinmemesini (disk birikmesi) ve ani kaynak baskısını temsil eder.
 
-Sistem gerçek bir üniversite altyapısını simüle eder. **Staj dönemlerinde** öğrenci VM talebi belirgin şekilde artar:
+### 15 Tanımlı Olay (Incident)
 
-| Staj Dönemi | Süre | Ek VM | vCPU + | Bellek + |
-|---|---|---|---|---|
-| Kış Stajı 2025 | Şub–Mar 2025 | +80 VM | +160 vCPU | +8% |
-| Yaz Stajı 2025 | Haz–Eyl 2025 | +185 VM | +370 vCPU | +15% |
-| Kış Stajı 2025–2026 | Oca–Şub 2026 | +105 VM | +210 vCPU | +10% |
-| Yaz Stajı 2026 | Haz–Tem 2026 | +155 VM | +310 vCPU | +13% |
+18 ay içinde yaşanan operasyonel olaylar. Her olay öncesinde erken uyarı logları yükselir
+(`buildup_days`), zirvede spike yaşanır, ardından sistem normale döner.
+
+| # | Olay | Dönem | Etki |
+|---|---|---|---|
+| ① | Kış Stajı Keystone Kimlik Aşırı Yükü | Şub 2025 | +80 vCPU · +680ms latency · %8 hata |
+| ② | Nova Zamanlayıcı Tıkanması | Mar 2025 | +120 vCPU · +540ms latency |
+| ③ | Disk G/Ç Yavaşlaması | May 2025 | +12TB disk · +820ms latency |
+| ④ | Yaz Stajı Pik — Kaynak Baskısı | Tem 2025 | +200 vCPU · +19% bellek · %9 hata |
+| ⑤ | Yaz Stajı DB Bağlantı Havuzu Tükenmesi | Ağu 2025 | +90 vCPU · +1900ms latency · %16 hata |
+| ⑥ | Bellek Baskısı — Hesaplama Grubu A | Eyl 2025 | +38% bellek spike |
+| ⑦ | Disk Kapasitesi Kritik Seviyeye Yaklaşıyor | Eki 2025 | +22TB disk |
+| ⑧ | Yüksek vCPU Kullanım Olayı | Kas 2025 | +320 vCPU · %14 hata |
+| ⑨ | Yılsonu Trafik Artışı | Ara 2025–Oca 2026 | +200 vCPU · +1100ms latency |
+| ⑩ | Kış Stajı DB Bağlantı Fırtınası | Oca 2026 | +140 vCPU · **+3400ms latency** · %30 hata |
+| ⑪ | Ağ Katmanı Kesintisi | Şub 2026 | +2600ms latency · %22 hata |
+| ⑫ | API Gecikme Bozunumu | Mar 2026 | +170 vCPU · +2200ms latency · %17 hata |
+| ⑬ | Zamanlayıcı Kaynak Yetersizliği | Nis 2026 | +230 vCPU · +1500ms latency |
+| ⑭ | Çok Kaynaklı Basamaklı Arıza | May 2026 | +290 vCPU · +34% bellek · **%35 hata** |
+| ⑮ | Yaz Stajı Keystone Kimlik Doğrulama Krizi | Haz 2026 | +120 vCPU · +1800ms latency |
+
+Her olayın `buildup_days` öncesinde `memory_pressure_count`, `slow_response_count` gibi
+erken uyarı log sayımları yükselir. Log pipeline'ının 4. aşaması bu örüntüleri çıkarır.
+
+### Veri Bölünmesi (Train / Test)
+
+```
+Eğitim : Ocak 2025 – Mart 2026  (15 ay, ~10 950 satır)
+Test   : Nisan 2026 – Haziran 2026  (3 ay,  ~2 190 satır)
+```
+
+Test setine ⑬⑭⑮ numaralı olaylar düşmektedir. Eğitim setindeki örüntüleri
+test setine genelleyebilen model daha düşük RMSE alır ve ★ olarak seçilir.
 
 ---
 
