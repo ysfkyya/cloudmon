@@ -79,48 +79,64 @@ def build_feature_matrix(metrics_df: pd.DataFrame, log_df: pd.DataFrame) -> pd.D
         (df.index.hour >= 8) & (df.index.hour <= 18) & (df.index.dayofweek < 5)
     ).astype(int)
 
-    # ── Hareketli istatistikler ───────────────────────────────────────────────
-    for col in _METRIC_COLS:
-        for w in _ROLL_WINDOWS:
-            df[f"{col}_rmean_{w}h"] = df[col].rolling(w, min_periods=1).mean()
-            if w <= 24:
-                df[f"{col}_rstd_{w}h"] = df[col].rolling(w, min_periods=1).std().fillna(0)
+    # ── Yeni sütunları dict'te topla, sonra tek concat ──────────────────────
+    new_cols: dict = {}
 
-    # ── Gecikme özellikleri ───────────────────────────────────────────────────
+    # Hareketli istatistikler
+    for col in _METRIC_COLS:
+        s = df[col]
+        for w in _ROLL_WINDOWS:
+            new_cols[f"{col}_rmean_{w}h"] = s.rolling(w, min_periods=1).mean()
+            if w <= 24:
+                new_cols[f"{col}_rstd_{w}h"] = s.rolling(w, min_periods=1).std().fillna(0)
+
+    # Gecikme özellikleri
     lag_cols = _METRIC_COLS + ["total_errors", "error_log_ratio", "total_warning_count"]
     for col in lag_cols:
         if col not in df.columns:
             continue
+        s = df[col]
         for lag in _LAG_HOURS:
-            df[f"{col}_lag_{lag}h"] = df[col].shift(lag)
+            new_cols[f"{col}_lag_{lag}h"] = s.shift(lag)
 
-    # ── Değişim hızı (delta) ─────────────────────────────────────────────────
+    # Değişim hızı (delta)
     _DELTA_COLS = [
         "vcpu_usage_percent", "memory_usage_percent", "disk_usage_percent",
         "api_latency_ms", "error_rate_percent", "vm_count",
         "slow_response_count", "memory_pressure_count", "connection_pool_warn_count",
     ]
     for col in _DELTA_COLS:
-        if col in df.columns:
-            for d in _DELTA_HOURS:
-                df[f"{col}_delta_{d}h"] = df[col].diff(d)
+        if col not in df.columns:
+            continue
+        s = df[col]
+        for d in _DELTA_HOURS:
+            new_cols[f"{col}_delta_{d}h"] = s.diff(d)
 
-    # ── Log hareketli toplamları ─────────────────────────────────────────────
+    # Log hareketli toplamları
     for col in _LOG_COUNT_COLS:
         if col not in df.columns:
             continue
-        df[f"{col}_rmean_6h"]  = df[col].rolling(6,  min_periods=1).mean()
-        df[f"{col}_rsum_24h"]  = df[col].rolling(24, min_periods=1).sum()
-        df[f"{col}_rsum_72h"]  = df[col].rolling(72, min_periods=1).sum()
+        s = df[col]
+        new_cols[f"{col}_rmean_6h"] = s.rolling(6,  min_periods=1).mean()
+        new_cols[f"{col}_rsum_24h"] = s.rolling(24, min_periods=1).sum()
+        new_cols[f"{col}_rsum_72h"] = s.rolling(72, min_periods=1).sum()
 
-    # ── Erken uyarı bileşik sinyal ───────────────────────────────────────────
+    df = pd.concat([df, pd.DataFrame(new_cols, index=df.index)], axis=1)
+
+    # Erken uyarı bileşik sinyal
     warn_cols = [c for c in _LOG_COUNT_COLS if "count" in c and c in df.columns
                  and any(w in c for w in ["slow", "memory_pressure", "connection_pool",
                                           "scheduler_degrad", "quota_press",
                                           "disk_io_degrad", "cascade"])]
     if warn_cols:
-        df["early_warning_composite"] = df[warn_cols].sum(axis=1)
-        df["early_warning_rmean_24h"] = df["early_warning_composite"].rolling(24, min_periods=1).mean()
+        ew = df[warn_cols].sum(axis=1)
+        df = pd.concat([
+            df,
+            pd.DataFrame({
+                "early_warning_composite": ew,
+                "early_warning_rmean_24h": ew.rolling(24, min_periods=1).mean(),
+            }, index=df.index),
+        ], axis=1)
 
     return df
 

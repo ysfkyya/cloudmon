@@ -9,11 +9,14 @@ Her iki taraf da (Claude + GPT-4o) aynı prompt'u alır; yanıtlar karşılaşt�
 """
 
 import os
+import sys
 from datetime import datetime
 
 import numpy as np
 import pandas as pd
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+from config import ANTHROPIC_API_KEY as _CFG_ANTHROPIC, OPENAI_API_KEY as _CFG_OPENAI
 
 PROVIDERS = {
     "claude": {
@@ -78,10 +81,12 @@ def build_prompt(context: dict) -> str:
         if info.get("stable"):
             cap_lines.append(f"  {lbl}: %{cur:.1f} → Kararlı (>180 gün, +{trend:.3f}%/gün)")
         elif info.get("estimated_date"):
-            days = int(info.get("days_to_threshold", 0))
+            days   = int(info.get("days_to_threshold", 0))
+            months = info.get("months_to_threshold")
+            time_s = f"~{months:.1f} ay / ~{days} gün" if months else f"~{days} gün"
             cap_lines.append(
                 f"  {lbl}: %{cur:.1f} → Eşik %{thr} | Tahmini dolum: "
-                f"{info['estimated_date']} (~{days} gün) | +{trend:.3f}%/gün"
+                f"{info['estimated_date']} ({time_s}) | +{trend:.3f}%/gün"
             )
         else:
             cap_lines.append(f"  {lbl}: %{cur:.1f} → Eşik %{thr} (yetersiz veri)")
@@ -367,8 +372,8 @@ def _call_openai(prompt: str, api_key: str) -> str:
 class LLMAdvisor:
     def __init__(self, anthropic_key: str = "", openai_key: str = ""):
         self.keys = {
-            "claude": anthropic_key or os.environ.get("ANTHROPIC_API_KEY", ""),
-            "openai": openai_key    or os.environ.get("OPENAI_API_KEY",    ""),
+            "claude": anthropic_key or _CFG_ANTHROPIC or os.environ.get("ANTHROPIC_API_KEY", ""),
+            "openai": openai_key    or _CFG_OPENAI    or os.environ.get("OPENAI_API_KEY",    ""),
         }
 
     def available_providers(self) -> list:

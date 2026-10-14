@@ -104,9 +104,10 @@ CloudMon bu *buildup* örüntülerini log verisi üzerinden istatistiksel analiz
 │    KAPASİTE TAHMİNİ     │       │   SHAP AÇIKLANABILIRLIK   │
 │                         │       │                           │
 │  3 kaynak × 3 ufuk      │       │  TreeExplainer /          │
-│  × 3 model = 27 model   │       │  LinearExplainer          │
-│                         │       │  Top özellik → aksiyon    │
-│  LR · RF · GBT          │       │                           │
+│  × 7 model = 63 model   │       │  LinearExplainer /        │
+│                         │       │  KernelExplainer          │
+│  LR · RF · GBT ·        │       │  Top özellik → aksiyon    │
+│  XGB · LGBM · CAT · MLP │       │                           │
 │  ★ RMSE ile model seçimi│       │                           │
 └──────────────┬──────────┘       └───────────────┬───────────┘
                │                                  │
@@ -116,7 +117,7 @@ CloudMon bu *buildup* örüntülerini log verisi üzerinden istatistiksel analiz
                ┌────────────────────────────────────┐
                │           ÖNERİ MOTORU             │
                │                                    │
-               │  Kapasite trendi → eşiğe kaç gün? │
+               │  Kapasite trendi → eşiğe kaç ay?  │
                │  Log anomalileri → z-score bazlı   │
                │  Ön-arıza örüntüleri → güven skoru │
                │  Cascade riski → çoklu anomali     │
@@ -167,14 +168,14 @@ flowchart TD
     I --> J
 
     subgraph ADIM4 ["4️⃣  Kapasite Tahmini"]
-        J[vCPU · Bellek · Disk\n× 24h / 72h / 168h\n× LR / RF / GBT = 27 model]
-        J --> J1[★ RMSE bazlı model seçimi]
+        J[vCPU · Bellek · Disk\n× 24h / 72h\n× LR / RF / GBT / XGB / LGBM / CAT / MLP = 42 model]
+        J --> J1[★ RMSE bazlı model seçimi → eşiğe kaç ay?]
     end
 
     J1 --> K
 
     subgraph ADIM5 ["5️⃣  SHAP Analizi"]
-        K[TreeExplainer + LinearExplainer\n9 kaynak×ufuk kombinasyonu\nBar + Beeswarm + Dependence]
+        K[TreeExplainer + LinearExplainer + model-agnostic\n9 kaynak×ufuk kombinasyonu · en iyi model\nBar + Beeswarm + Dependence]
     end
 
     K --> L
@@ -267,6 +268,24 @@ Sistem gerçek bir üniversite altyapısını simüle eder. **Staj dönemlerinde
 ---
 
 ## 📋 Log Verisi ve 4 Aşamalı Log İşleme Hattı
+
+### Log'un İki Farklı Kullanımı
+
+Log verisi bu projede **iki ayrı yerde** kullanılır:
+
+```
+1. KAPASİTE MODELLERİNE GİRDİ
+   log_features.csv → rolling/sum türetilir (54 sütun)
+                    → 272 özelliğin içine eklenir
+                    → kapasite modelleri bu özelliklerle eğitilir
+   Amaç: "hata sayısı artmadan önce vCPU yükselir mi?" gibi
+          korelasyonları modelin kendisi öğrensin.
+
+2. ÖNERİ SİSTEMİ İÇİN BAĞIMSIZ ANALİZ (4 aşamalı pipeline)
+   log_features.csv → z-skor, trend, anomali tespiti, ön-arıza örüntüsü
+   Amaç: "şu an hangi log tipi anormal?", "geçmişte bu örüntü
+          büyük olayları önceden verdi mi?" sorularını yanıtla.
+```
 
 ### Proaktif İzlemenin Temeli: Erken Uyarı Logları
 
@@ -432,6 +451,35 @@ Ham metrik ve log verileri, `feature_engineering.py` tarafından ~272 sütunlu b
 - Erken Uyarı: `slow_response_count`, `memory_pressure_count`, `connection_pool_warn_count`,
   `scheduler_degradation_count`, `quota_pressure_count`, `disk_io_degradation_count`, `cascade_indicator_count`
 
+### Lag ve Rolling Özellikleri Nedir?
+
+Ham veri sadece anlık değeri içerir. Model her satıra tek seferlik bakacağı için
+o satıra geçmiş bilgi **önceden işlenerek** eklenir:
+
+```
+Ham veri:
+  timestamp            vcpu_%
+  2025-01-01 00:00     30.5
+  2025-01-01 01:00     31.2
+  2025-01-01 02:00     31.8
+  2025-01-01 03:00     32.1
+
+Türetilmiş sütunlar (build_feature_matrix() çıktısı):
+  timestamp       vcpu_%  lag_1h  lag_24h  rmean_3h  delta_1h
+  01-01 00:00     30.5    NaN     NaN      30.5       NaN
+  01-01 01:00     31.2    30.5    NaN      30.85      +0.7
+  01-01 02:00     31.8    31.2    NaN      31.17      +0.6
+  01-01 03:00     32.1    31.8    NaN      31.70      +0.3
+  ...
+  01-02 01:00     38.4    37.9    31.2     38.1       +0.5  ← lag_24h artık dolu
+```
+
+`lag_24h` = 24 satır önceki değer (`shift(24)`)
+`rmean_3h` = son 3 satırın ortalaması (`rolling(3).mean()`)
+
+Bu işlem ham metrik CSV'si değiştirilmeden sadece hafızaya alınan DataFrame üzerinde yapılır.
+Disk'e yazılan `features.csv` bu türetilmiş 272 sütunu içerir.
+
 **Neden bu kadar çok özellik?**
 
 - **Rolling:** Anlık değer gürültülüdür. 24 saatlik ortalama, kalıcı yükü temsil eder.
@@ -453,26 +501,76 @@ ML modelleriyle analiz ederek **eşiğe kaç gün kaldığını** önceden hesap
 ### Model Yapısı
 
 ```
-3 Kaynak × 3 Zaman Ufku × 3 Model = 27 Model
-───────────────────────────────────────────────
-Kaynak   : vCPU · Bellek · Disk  (vcpu_usage_percent, memory_usage_percent, disk_usage_percent)
-Ufuk     : 24 saat · 72 saat · 168 saat (1 hafta)
-Model    : Linear Regression · Random Forest · Gradient Boosting
-Seçim    : Her kaynak–ufuk çifti için en düşük RMSE
+3 Kaynak × 2 Zaman Ufku × 7 Model = 42 Model
+──────────────────────────────────────────────────────────
+Kaynak   : vCPU · Bellek · Disk
+Ufuk     : 24 saat (1 gün) · 72 saat (3 gün)
+Model    : LR · RF · GBT · XGBoost · LightGBM · CatBoost · MLP
+Seçim    : Her kaynak–ufuk çifti için en düşük RMSE → o model gelecek tahmininde kullanılır
 ```
+
+**Her kaynak tamamen bağımsız bir regresyon problemidir:**
+
+```
+vcpu_usage_percent_future_24h   → 7 model eğitilir, en iyisi seçilir → vCPU deadline
+memory_usage_percent_future_24h → 7 model eğitilir, en iyisi seçilir → Bellek deadline
+disk_usage_percent_future_24h   → 7 model eğitilir, en iyisi seçilir → Disk deadline
+```
+
+Girdi (X) üçünde de aynıdır — 272 özelliğin tamamı. Yani vCPU modeli bellek
+ve disk özelliklerini de görür; kaynaklar arası korelasyonu kendisi öğrenebilir.
+Sadece **ne tahmin ettiği** farklıdır.
+
+**Hangi model kazanır önceden bilinmez — veriye göre değişir:**
+
+```
+vCPU 24h:    LR=1.3★  RF=2.1   GBT=1.9  XGB=1.8  LGBM=2.0  CAT=2.2  MLP=2.5
+Bellek 24h:  LR=3.4★  RF=4.1   GBT=3.8  XGB=3.6  LGBM=3.9  CAT=4.0  MLP=4.3
+Disk 24h:    LR=2.8   RF=3.1   GBT=2.6  XGB=2.4★ LGBM=2.7  CAT=2.5  MLP=3.2
+             ↑ RMSE (düşük = iyi). ★ = kazanan → deadline tahminine o kullanılır
+```
+
+Dashboard'daki ★ simgesi kazananı gösterir. `capacity_results.json` tüm 42 modelin
+MAE / RMSE / R² değerlerini içerir.
 
 ### Kullanılan Modeller ve Parametreler
 
-| Model | Parametreler | Avantajı |
-|---|---|---|
-| **Linear Regression** | StandardScaler + default | Yorumlanabilir, monoton trendlerde güçlü |
-| **Random Forest** | 200 ağaç, max_depth=12, min_samples_leaf=4 | Doğrusal olmayan ilişkiler, outlier'a dayanıklı |
-| **Gradient Boosting** | 200 iter, max_depth=5, lr=0.08, subsample=0.85 | Karmaşık etkileşimler, yüksek doğruluk |
+| Model | Ölçekleme | Parametreler | Notlar |
+|---|---|---|---|
+| **Linear Regression** | ✓ StandardScaler | default | Yorumlanabilir, monoton trendlerde güçlü |
+| **Random Forest** | — | 200 ağaç, max_depth=12, min_samples_leaf=4 | Doğrusal olmayan ilişkiler, outlier'a dayanıklı |
+| **Gradient Boosting** | — | 200 iter, depth=5, lr=0.08, sub=0.85 | Karmaşık etkileşimler, yüksek doğruluk |
+| **XGBoost** | — | 200 iter, depth=5, lr=0.08, sub=0.85 | GBT'nin optimize edilmiş versiyonu; paralel eğitim |
+| **LightGBM** | — | 200 iter, depth=5, lr=0.08, sub=0.85 | Leaf-wise büyüme; büyük veri ve yüksek boyutsallıkta hızlı |
+| **CatBoost** | — | 200 iter, depth=5, lr=0.08, sub=0.85 | Kategorik-özellik dostu; az hiperparametre ayarı |
+| **MLP** | ✓ StandardScaler | (128, 64) ReLU, 500 iter, early_stopping | Doğrusal olmayan örüntüleri öğrenebilir; yeterli veri gerekir |
 
-### Eşiğe Kaç Gün Kaldığı — ML Tabanlı İteratif Tahmin
+> **Ölçekleme:** Yalnızca Linear Regression ve MLP `StandardScaler` gerektirir.
+> Ağaç tabanlı modeller (RF, GBT, XGBoost, LightGBM, CatBoost) ham özelliklerle çalışır.
+
+### Neden Sliding Window (LSTM / GRU) Kullanılmadı?
+
+Zaman serisi tahmininde sliding window yaklaşımı (LSTM, GRU, Transformer) sabit uzunluklu
+dizileri girdi olarak alır ve `(samples, timesteps, features)` biçiminde 3-boyutlu tensör gerektirir.
+
+CloudMon **tabular/supervised** mimarisi kullanır:
+- Hedef: `shift(-h)` ile her satır için `h` saat sonraki değer — tek bir skaler
+- Girdi: o satır için lag/rolling/delta ile zenginleştirilmiş **tek satır** özellik vektörü
+- Boyut: `(samples, 272 features)` — standart 2D tablo
+
+Bu tasarım şunları sağlar:
+- Her model için bağımsız test seti karşılaştırması (42 model × RMSE)
+- SHAP (TreeExplainer / LinearExplainer) ile tam açıklanabilirlik
+- Kolay iteratif tahmin: son satır → t+24h tahmini → özellik güncelle → tekrar
+
+LSTM/GRU eklenmesi bu mimarinin tamamını değiştirirdi: ayrı veri loader,
+3D batch üretimi, farklı eğitim döngüsü, SHAP yerine attention görselleştirmesi.
+13 000 satırlık veri boyutunda aşırı uyum riski de yüksektir.
+
+### Eşiğe Kaç Ay / Gün Kaldığı — ML Tabanlı İteratif Tahmin
 
 ```
-1. capacity_results'tan 24s ufkunda en iyi model seçilir (LR / RF / GBT)
+1. capacity_results'tan 24s ufkunda en iyi model seçilir (en düşük RMSE)
        ↓
 2. Son feature satırından başlanır (lag, rolling, delta, zaman özellikleri)
        ↓
@@ -481,14 +579,14 @@ Seçim    : Her kaynak–ufuk çifti için en düşük RMSE
 4. Lag/rolling/delta özellikleri tahmin edilen değerle güncellenir
    Zaman özellikleri gerçek takvim tarihine çekilir
        ↓
-5. Tahmin ≥ eşik → tarih döndürülür
+5. Tahmin ≥ eşik → gün ve ay (gün / 30.44) döndürülür
    Değilse → adım tekrar (maks 2 yıl / 730 adım)
 ```
 
-**Gerçek pipeline çıktısı:**
+**Örnek çıktı:**
 ```
-vCPU  : %79.6 → Eşik %90.0 | +0.275%/gün | Tahmini eşik: 2026-09-12 (~74 gün)
-Bellek: %85.5 → Eşik %88.0 | +0.151%/gün | Tahmini eşik: 2026-08-15 (~46 gün)
+vCPU  : %79.6 → Eşik %90.0 | +0.275%/gün | 2026-09-12 (~2.4 ay / ~74 gün)
+Bellek: %85.5 → Eşik %88.0 | +0.151%/gün | 2026-08-15 (~1.5 ay / ~46 gün)
 ```
 
 ### Değerlendirme Metrikleri
@@ -651,31 +749,38 @@ GÖREV: Proaktif operasyonel öneriler üret (kapasite planlaması, staj hazırl
 
 ## 📊 Model Performans Sonuçları
 
-### Kapasite Tahmini (Gerçek Sonuçlar — 272 özellik, 13 104 satır)
+### Kapasite Tahmini (272 özellik · 15 ay eğitim / 3 ay test · 63 model)
 
-| Kaynak | Ufuk | En İyi Model | MAE | RMSE | R² |
+Aşağıdaki tablo her kaynak–ufuk çifti için 7 modelden **en düşük RMSE'ye sahip olanı** gösterir.
+Tam tablo (tüm 63 modelin MAE/RMSE/R²) `results/reports/capacity_results.json` ve dashboard'da mevcuttur.
+
+| Kaynak | Ufuk | En İyi Model ★ | MAE | RMSE | R² |
 |---|---|---|---|---|---|
-| vCPU | 24 saat | **Linear Regression** | 0.92 | 1.31 | 0.9577 |
-| vCPU | 72 saat | **Linear Regression** | 1.88 | 2.99 | 0.7756 |
-| vCPU | 168 saat | **Random Forest** | 7.89 | 9.99 | -1.670 |
-| Bellek | 24 saat | **Linear Regression** | 2.15 | 3.44 | 0.7959 |
-| Bellek | 72 saat | **Linear Regression** | 4.45 | 6.06 | 0.3454 |
-| Bellek | 168 saat | **Random Forest** | 10.66 | 12.45 | -1.982 |
-| Disk | 24 saat | **Linear Regression** | 1.69 | 2.82 | 0.7010 |
-| Disk | 72 saat | **Linear Regression** | 5.45 | 9.32 | -2.398 |
-| Disk | 168 saat | **Linear Regression** | 6.08 | 8.07 | -1.785 |
+| vCPU | 24 saat | pipeline çalıştırınca güncellenir | — | — | — |
+| vCPU | 72 saat | pipeline çalıştırınca güncellenir | — | — | — |
+| vCPU | 168 saat | pipeline çalıştırınca güncellenir | — | — | — |
+| Bellek | 24 saat | pipeline çalıştırınca güncellenir | — | — | — |
+| Bellek | 72 saat | pipeline çalıştırınca güncellenir | — | — | — |
+| Bellek | 168 saat | pipeline çalıştırınca güncellenir | — | — | — |
+| Disk | 24 saat | pipeline çalıştırınca güncellenir | — | — | — |
+| Disk | 72 saat | pipeline çalıştırınca güncellenir | — | — | — |
+| Disk | 168 saat | pipeline çalıştırınca güncellenir | — | — | — |
 
-> MAE ve RMSE birimleri yüzde puanı (%). 24h ufkunda Linear Regression dominant:
-> iki fazlı büyüme modeli lineer trendi çok iyi yakalamaktadır (vCPU 24h R²=0.96).
-> 72h+ ufuklarda negatif R²: staj dönemlerindeki ani sıçramalar eğitim setinden test setine genellenemiyor.
+> MAE ve RMSE birimleri yüzde puanı (%). Kısa ufuklarda (24h) büyüme eğilimini iyi yakalayan
+> modeller öne çıkar. Uzun ufuklarda (168h) staj dönemlerinin ani sıçramaları genellemeyi güçleştirir.
+> `bash setup.sh` sonrasında tablodaki değerler `capacity_results.json`'dan okunabilir.
 
-### Eşik Tarihi İçin Seçilen ML Modelleri (24h RMSE bazlı)
+### SHAP Explainer — Model Başına
 
-| Kaynak | Model | SHAP Explainer |
+| Model Ailesi | SHAP Explainer | Açıklama |
 |---|---|---|
-| vCPU | Linear Regression | `shap.LinearExplainer` + iteratif tahmin |
-| Bellek | Linear Regression | `shap.LinearExplainer` + iteratif tahmin |
-| Disk | Linear Regression | `shap.LinearExplainer` + iteratif tahmin |
+| **Linear Regression** | `shap.LinearExplainer` | Katsayı × değer yaklaşımı; 200 örnek arka plan |
+| **Random Forest** | `shap.TreeExplainer` | Ağaç yollarından türetilir; model-içi verimli |
+| **Gradient Boosting** | `shap.TreeExplainer` | Her boosting adımı ayrı değerlendirilir |
+| **XGBoost** | `shap.TreeExplainer` | XGBoost için native TreeExplainer desteği |
+| **LightGBM** | `shap.TreeExplainer` | LightGBM için native TreeExplainer desteği |
+| **CatBoost** | `shap.TreeExplainer` | CatBoost için native TreeExplainer desteği |
+| **MLP** | model-agnostic (100 örnek) | KernelExplainer yerine örneklenmiş arka plan |
 
 ---
 
@@ -718,31 +823,31 @@ cloudmon/
 │       └── llm_advisor.py               # Claude + GPT-4o (metrik + log içgörüleri birleşik prompt)
 │
 ├── data/
-│   ├── raw/
-│   │   ├── metrics.csv                   # 13 104 satır × vCPU/Bellek/Disk mutlak + yüzde + diğerleri
-│   │   ├── log_features.csv              # 13 104 satır × 15 log tipi saatlik sayımı
-│   │   └── raw_logs.csv                  # 8 000 ham OpenStack log satırı
-│   └── processed/
-│       ├── features.csv                  # 13 104 × 272 özellik matrisi
-│       └── models/                       # 27 kapasite modeli (.pkl)
+│   ├── synthetic/                         # ← Git'te izlenir; ileride gerçek veriyle değiştirilecek
+│   │   ├── metrics.csv                    # 13 104 satır × vCPU/Bellek/Disk mutlak + yüzde + diğerleri
+│   │   ├── log_features.csv               # 13 104 satır × 15 log tipi saatlik sayımı
+│   │   └── raw_logs.csv                   # 8 000 ham OpenStack log satırı
+│   └── processed/                         # ← .gitignore'da (pipeline çıktısı)
+│       ├── features.csv                   # 13 104 × 272 özellik matrisi
+│       └── models/                        # 63 kapasite modeli (.pkl)
 │
-└── results/
+└── results/                               # ← .gitignore'da (pipeline çıktısı)
     ├── figures/
-    │   ├── metrics_overview.png           # vCPU/Bellek/Disk mutlak değer trendi + projeksiyon
-    │   ├── log_analysis.png               # 15 log tipinin zaman serisi
-    │   ├── log_pipeline_analysis.png      # 4 panel: risk skoru · z-skor · ön-arıza · 7g trend
-    │   ├── capacity_forecasts.png         # Tahmin vs gerçek karşılaştırması
-    │   ├── capacity_model_comparison.png  # 3 model × 3 kaynak bar grafiği
-    │   ├── capacity_residuals.png         # Hata dağılımı histogramları
-    │   └── shap_*.png                     # 27 SHAP grafiği (bar + beeswarm + dep)
+    │   ├── metrics_overview.png            # vCPU/Bellek/Disk mutlak değer trendi + projeksiyon
+    │   ├── log_analysis.png                # 15 log tipinin zaman serisi
+    │   ├── log_pipeline_analysis.png       # 4 panel: risk skoru · z-skor · ön-arıza · 7g trend
+    │   ├── capacity_forecasts.png          # Tahmin vs gerçek karşılaştırması
+    │   ├── capacity_model_comparison.png   # 7 model × 3 kaynak bar grafiği
+    │   ├── capacity_residuals.png          # Hata dağılımı histogramları
+    │   └── shap_*.png                      # 9 SHAP grafiği (bar + beeswarm + dep)
     │
     └── reports/
-        ├── capacity_results.json          # 27 modelin MAE/RMSE/R² sonuçları
-        ├── recommendations.json           # Kural motoru önerileri
-        ├── recommendations.txt            # İnsan okunabilir özet
-        ├── llm_recommendations.json       # Claude + GPT-4o yanıtları
-        ├── llm_recommendations.txt        # İnsan okunabilir LLM raporu
-        └── shap_*.csv                     # 9 SHAP özellik önem tablosu
+        ├── capacity_results.json           # 63 modelin MAE/RMSE/R² sonuçları
+        ├── recommendations.json            # Kural motoru önerileri
+        ├── recommendations.txt             # İnsan okunabilir özet
+        ├── llm_recommendations.json        # Claude + GPT-4o yanıtları
+        ├── llm_recommendations.txt         # İnsan okunabilir LLM raporu
+        └── shap_*.csv                      # 9 SHAP özellik önem tablosu
 ```
 
 ---
@@ -751,67 +856,60 @@ cloudmon/
 
 ### Gereksinimler
 
-```bash
+```
 Python 3.10+
 ```
 
-### Kurulum
+### Tek Komut Kurulum (Önerilen)
+
+```bash
+bash setup.sh
+```
+
+`setup.sh` sırasıyla şunları yapar:
+1. API anahtarlarını sorar → `.env` dosyasına yazar (`.gitignore`'da — güvenli)
+2. Python sanal ortam oluşturur (`venv/`)
+3. Tüm bağımlılıkları yükler (`pip install -r requirements.txt`)
+4. `python3 main.py` ile tüm pipeline'ı çalıştırır (~15–20 dk)
+
+### LLM API Anahtarları
+
+API anahtarları üç yoldan biri ile verilebilir (öncelik sırası):
+
+| Yöntem | Nasıl |
+|---|---|
+| **`bash setup.sh`** (önerilen) | Kurulum sırasında sorar, `.env`'e yazar |
+| **`.env` dosyası** | Proje kökünde `.env` oluştur |
+| **Ortam değişkeni** | `export ANTHROPIC_API_KEY="sk-ant-..."` |
+
+`.env` örneği:
+```
+ANTHROPIC_API_KEY=sk-ant-xxxxxxxxxxxxx
+OPENAI_API_KEY=sk-xxxxxxxxxxxxx
+```
+
+> API anahtarı verilmezse LLM önerileri atlanır; diğer tüm özellikler çalışmaya devam eder.
+
+### Manuel Kurulum
 
 ```bash
 python3 -m venv venv
-source venv/bin/activate   # Windows: venv\Scripts\activate
+source venv/bin/activate          # Windows: venv\Scripts\activate
 pip install -r requirements.txt
+python3 main.py                   # ~15-20 dk (63 model × 272 özellik)
 ```
 
-### ML Pipeline (Ana Çalıştırma)
+### Dashboard
 
 ```bash
-python main.py
-```
+bash start.sh                     # port 8501 (otomatik pipeline çalıştırır)
+PORT=8502 bash start.sh           # farklı port
 
-Pipeline yaklaşık **60–90 dakika** sürer (model eğitimi ağırlıklı). Çıktılar `results/` dizinine yazılır.
-
-**Pipeline çıktısı:**
-```
-══════════════════════════════════════════════════════════════
-  BULUT ALTYAPI PROAKTİF İZLEME & KARAR DESTEK SİSTEMİ
-  OpenStack | vCPU: 30 → 1598/2000 | Log Pipeline + LLM
-══════════════════════════════════════════════════════════════
-
-── ADIM 1 / 6  →  Sentetik Veri Üretimi
-   vCPU: 43 → 1592/2000 (%79.6) · Bellek: 2551 → 6841/8000 GB · Disk: 139 → 400/500 TB
-   Ham log: 8000 (WARNING: 2732  ERROR: 4937  CRITICAL: 331)
-
-── ADIM 2 / 6  →  Log İşleme Hattı (4 Aşamalı Analiz)
-   Anomali: 4 (son 24s) · Ön-arıza örüntüsü: 6 · Cascade: 3 olay
-
-── ADIM 3 / 6  →  Özellik Mühendisliği  (13 104 × 272)
-
-── ADIM 4 / 6  →  Kapasite Tahmin Modelleri
-   [vCPU | 24s | Linear Regression]  R²=0.9577
-
-── ADIM 5 / 6  →  SHAP Açıklanabilirlik Analizi
-
-── ADIM 6 / 6  →  Proaktif Öneri Üretimi (Kural + LLM)
-```
-
-### LLM Entegrasyonu (İsteğe Bağlı)
-
-```bash
-export ANTHROPIC_API_KEY="sk-ant-..."
-export OPENAI_API_KEY="sk-..."
-```
-
-API anahtarı varsa ADIM 6'da otomatik olarak LLM çağrısı yapılır ve
-`results/reports/llm_recommendations.{json,txt}` dosyalarına kaydedilir.
-
-### Streamlit Dashboard
-
-```bash
+# veya doğrudan:
 python3 -m streamlit run dashboard.py --server.port 8501
 ```
 
-Tarayıcıda `http://localhost:8501` adresini açın.
+Tarayıcıda `http://localhost:8501` açın.
 
 ---
 
@@ -835,8 +933,9 @@ Tarayıcıda `http://localhost:8501` adresini açın.
 
 | Kategori | Kütüphane / Araç | Kullanım Amacı |
 |---|---|---|
-| **Makine Öğrenmesi** | scikit-learn | LR, RF, GBT; StandardScaler |
-| **Açıklanabilirlik** | shap | TreeExplainer, LinearExplainer, görselleştirme |
+| **Makine Öğrenmesi** | scikit-learn | LR, RF, GBT, MLP; StandardScaler |
+| **Gradient Boosting** | xgboost, lightgbm, catboost | XGBoost / LightGBM / CatBoost regresyon modelleri |
+| **Açıklanabilirlik** | shap | TreeExplainer, LinearExplainer, model-agnostic |
 | **Veri İşleme** | pandas, numpy | Özellik mühendisliği, zaman serisi, z-skor |
 | **Görselleştirme** | matplotlib, seaborn | Grafik üretimi (30+ PNG) |
 | **Model Serileştirme** | joblib | .pkl model kaydetme/yükleme |
@@ -849,20 +948,27 @@ Tarayıcıda `http://localhost:8501` adresini açın.
 
 ## 📌 Önemli Notlar
 
-### Sentetik Veri
+### Veri Katmanı ve Geçiş Planı
 
-Bu akademik prototipte tüm veriler Python ile üretilmiştir. Gerçek bir sisteme entegrasyon
-için yalnızca veri üretim katmanı (`src/data_generation/`) değiştirilir:
+`data/synthetic/` klasöründeki CSV dosyaları Python ile üretilmiş, gerçekçi bir OpenStack
+altyapısını simüle eden verilerdir. Gerçek sisteme geçiş için **yalnızca bu klasörün içeriği
+ve `src/data_generation/` modülü değiştirilir** — diğer tüm katmanlar aynı kalır:
 
 ```
-Prototip                              →  Gerçek Sistem
-────────────────────────────────────────────────────────
-metrics_generator.generate_metrics()  →  Prometheus HTTP API
-log_generator.generate_log_features() →  OpenSearch aggregation query
-log_generator.generate_raw_logs()     →  OpenSearch raw log query
-log_processor.run_log_pipeline()      →  Değişmez (aynı pipeline)
-Diğer tüm katmanlar                   →  Değişmez, aynı kod çalışır
+Prototip (data/synthetic/)             →  Gerçek Sistem
+────────────────────────────────────────────────────────────────
+src/data_generation/metrics_generator  →  Prometheus / Thanos HTTP API
+src/data_generation/log_generator      →  OpenSearch aggregation query
+src/data_generation/log_processor      →  Değişmez — aynı 4 aşamalı pipeline
+src/preprocessing/feature_engineering  →  Değişmez
+src/models/capacity_predictor          →  Değişmez
+src/explainability/shap_explainer      →  Değişmez
+src/recommendations/                   →  Değişmez
+dashboard.py                           →  Değişmez
 ```
+
+> `data/synthetic/` klasörü Git'te izlenir ve ileride kaldırılacaktır.
+> Gerçek veri alındığında `data/synthetic/` → `data/raw/` (veya benzeri) olarak değiştirilir.
 
 ### Tekrarlanabilirlik
 

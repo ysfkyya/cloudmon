@@ -1,13 +1,18 @@
 """
 Kapasite tahmin modülleri.
 
-Üç model karşılaştırılır:
-  • Doğrusal Regresyon (LinearRegression)
+Yedi model karşılaştırılır:
+  • Doğrusal Regresyon (LinearRegression)      — ölçeklenmiş
   • Rastgele Orman    (RandomForestRegressor)
   • Gradient Boosting (GradientBoostingRegressor)
+  • XGBoost           (XGBRegressor)
+  • LightGBM          (LGBMRegressor)
+  • CatBoost          (CatBoostRegressor)
+  • MLP               (MLPRegressor)           — ölçeklenmiş
 
 Her kaynak (vCPU / Bellek / Disk) × her zaman ufku (24h / 72h / 168h) için ayrı
-modeller eğitilir. Sonuçlar results/reports/capacity_results.json dosyasına yazılır.
+modeller eğitilir. En düşük RMSE'ye sahip model gelecek tahmini için seçilir.
+Sonuçlar results/reports/capacity_results.json dosyasına yazılır.
 """
 
 import os
@@ -19,16 +24,23 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 import seaborn as sns
-from sklearn.linear_model  import LinearRegression
-from sklearn.ensemble      import RandomForestRegressor, GradientBoostingRegressor
-from sklearn.preprocessing import StandardScaler
-from sklearn.metrics       import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.linear_model    import LinearRegression
+from sklearn.ensemble        import RandomForestRegressor, GradientBoostingRegressor
+from sklearn.neural_network  import MLPRegressor
+from sklearn.preprocessing   import StandardScaler
+from sklearn.metrics         import mean_absolute_error, mean_squared_error, r2_score
+from xgboost                 import XGBRegressor
+from lightgbm                import LGBMRegressor
+from catboost                import CatBoostRegressor
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from config import CAPACITY_TARGETS, FORECAST_HORIZONS, THRESHOLDS, RESULTS_DIR, DATA_DIR, TRAIN_END_DATE, END_DATE
 
 _MODEL_DIR = os.path.join(DATA_DIR, "processed", "models")
 os.makedirs(_MODEL_DIR, exist_ok=True)
+
+# Ölçekleme gerektiren modeller: Linear Regression, MLP
+_NEEDS_SCALING = {"Linear Regression", "MLP"}
 
 _MODELS = {
     "Linear Regression": LinearRegression(),
@@ -38,6 +50,22 @@ _MODELS = {
     "Gradient Boosting": GradientBoostingRegressor(
                              n_estimators=200, max_depth=5,
                              learning_rate=0.08, subsample=0.85, random_state=42),
+    "XGBoost":           XGBRegressor(
+                             n_estimators=200, max_depth=5,
+                             learning_rate=0.08, subsample=0.85,
+                             n_jobs=-1, random_state=42, verbosity=0),
+    "LightGBM":          LGBMRegressor(
+                             n_estimators=200, max_depth=5,
+                             learning_rate=0.08, subsample=0.85,
+                             n_jobs=-1, random_state=42, verbose=-1),
+    "CatBoost":          CatBoostRegressor(
+                             iterations=200, depth=5,
+                             learning_rate=0.08, subsample=0.85,
+                             random_state=42, verbose=0),
+    "MLP":               MLPRegressor(
+                             hidden_layer_sizes=(128, 64), activation="relu",
+                             max_iter=500, early_stopping=True,
+                             random_state=42),
 }
 
 _RESOURCE_LABELS = {
@@ -82,7 +110,7 @@ def train_capacity_models(datasets: dict) -> dict:
             import copy
             model = copy.deepcopy(model_proto)
 
-            if "Linear" in mname:
+            if mname in _NEEDS_SCALING:
                 model.fit(X_tr_s, y_train)
                 y_pred = model.predict(X_te_s)
             else:
@@ -152,16 +180,18 @@ def _plot_model_comparison(results: dict) -> None:
             })
     df = pd.DataFrame(rows)
 
-    fig, axes = plt.subplots(1, len(FORECAST_HORIZONS), figsize=(14, 5), sharey=False)
-    if len(FORECAST_HORIZONS) == 1:
+    n_horizons = len(FORECAST_HORIZONS)
+    fig, axes = plt.subplots(1, n_horizons, figsize=(7 * n_horizons, 6), sharey=False)
+    if n_horizons == 1:
         axes = [axes]
 
+    palette = "tab10"
     for ax, h in zip(axes, FORECAST_HORIZONS):
         sub = df[df["Ufuk"] == f"{h}s"]
-        sns.barplot(data=sub, x="Kaynak", y="RMSE", hue="Model", ax=ax, palette="Set2")
+        sns.barplot(data=sub, x="Kaynak", y="RMSE", hue="Model", ax=ax, palette=palette)
         ax.set_title(f"Kapasite Tahmini RMSE — {h} Saatlik Ufuk")
         ax.set_xlabel("")
-        ax.legend(fontsize=8)
+        ax.legend(fontsize=7, loc="upper right")
         ax.tick_params(axis="x", rotation=20)
 
     plt.tight_layout()
@@ -269,7 +299,7 @@ def predict_days_to_threshold(feature_df: pd.DataFrame,
     if current >= thr:
         return {
             "resource": col, "current_value": round(current, 2),
-            "threshold": thr, "days_to_threshold": 0,
+            "threshold": thr, "days_to_threshold": 0, "months_to_threshold": 0,
             "estimated_date": str(last_ts.date()), "stable": False,
             "daily_trend": 0.0, "method": "ML", "as_of": str(last_ts),
         }
@@ -285,7 +315,7 @@ def predict_days_to_threshold(feature_df: pd.DataFrame,
 
     model_path = os.path.join(
         DATA_DIR, "processed", "models",
-        f"capacity_{col}_24h_{best_m.lower().replace(' ', '_')}.pkl",
+        f"capacity_{col}_24h_{best_m.lower().replace(' ', '_').replace('(', '').replace(')', '')}.pkl",
     )
     if not os.path.exists(model_path):
         return _threshold_fallback(feature_df, col, last_ts, thr, current)
@@ -346,7 +376,7 @@ def predict_days_to_threshold(feature_df: pd.DataFrame,
                 row[feat] = val
 
         X = np.array([[row[f] for f in feature_names]], dtype=float)
-        if "Linear" in best_m and scaler is not None:
+        if best_m in _NEEDS_SCALING and scaler is not None:
             X = scaler.transform(X)
 
         predicted = float(np.clip(model.predict(X)[0], 0.0, 100.0))
@@ -355,23 +385,25 @@ def predict_days_to_threshold(feature_df: pd.DataFrame,
             hist = hist[-168:]
 
         if predicted >= thr:
-            days = elapsed_h / 24.0
+            days   = elapsed_h / 24.0
+            months = round(days / 30.44, 1)
             daily_trend = (predicted - current) / days if days > 0 else 0.0
             return {
-                "resource":          col,
-                "current_value":     round(current, 2),
-                "threshold":         thr,
-                "daily_trend":       round(daily_trend, 4),
-                "days_to_threshold": round(days, 1),
-                "estimated_date":    str(pred_ts.date()),
-                "stable":            False,
-                "method":            f"ML-{best_m}",
-                "as_of":             str(last_ts),
+                "resource":            col,
+                "current_value":       round(current, 2),
+                "threshold":           thr,
+                "daily_trend":         round(daily_trend, 4),
+                "days_to_threshold":   round(days, 1),
+                "months_to_threshold": months,
+                "estimated_date":      str(pred_ts.date()),
+                "stable":              False,
+                "method":              f"ML-{best_m}",
+                "as_of":               str(last_ts),
             }
 
     return {
         "resource": col, "current_value": round(current, 2),
-        "threshold": thr, "days_to_threshold": None,
+        "threshold": thr, "days_to_threshold": None, "months_to_threshold": None,
         "estimated_date": None, "stable": True,
         "daily_trend": 0.0, "method": f"ML-{best_m}",
         "as_of": str(last_ts),
@@ -382,7 +414,8 @@ def _threshold_fallback(feature_df, col, last_ts, thr, current):
     vals   = feature_df[col].dropna().values
     if len(vals) < 48:
         return {"resource": col, "current_value": round(current, 2), "threshold": thr,
-                "days_to_threshold": None, "estimated_date": None, "stable": True,
+                "days_to_threshold": None, "months_to_threshold": None,
+                "estimated_date": None, "stable": True,
                 "daily_trend": 0.0, "method": "fallback", "as_of": str(last_ts)}
     window  = min(720, len(vals) - 24)
     recent  = vals[-window:]
@@ -390,11 +423,14 @@ def _threshold_fallback(feature_df, col, last_ts, thr, current):
     slope   = float(np.median(changes))
     if slope < 0.005:
         return {"resource": col, "current_value": round(current, 2), "threshold": thr,
-                "days_to_threshold": None, "estimated_date": None, "stable": True,
+                "days_to_threshold": None, "months_to_threshold": None,
+                "estimated_date": None, "stable": True,
                 "daily_trend": round(slope, 4), "method": "fallback", "as_of": str(last_ts)}
     days   = (thr - current) / slope
+    months = round(days / 30.44, 1)
     target = last_ts + pd.Timedelta(days=days)
     return {"resource": col, "current_value": round(current, 2), "threshold": thr,
             "daily_trend": round(slope, 4), "days_to_threshold": round(days, 0),
+            "months_to_threshold": months,
             "estimated_date": str(target.date()), "stable": False,
             "method": "fallback", "as_of": str(last_ts)}

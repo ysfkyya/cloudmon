@@ -25,7 +25,7 @@ fi
 source "$VENV/bin/activate"
 
 # Sonuç dosyası kontrolü
-if [ ! -f "results/reports/capacity_results.json" ]; then
+if [ ! -f "results/reports/capacity_results.json" ] || [ ! -f "data/synthetic/metrics.csv" ]; then
     echo -e "${YELLOW}[!]${NC} ML sonuçları bulunamadı. Pipeline çalıştırılıyor..."
     python3 main.py
 fi

@@ -135,23 +135,26 @@ def _capacity_recommendations(feature_df, cap_results, shap_cap, ts_now):
             top_feat = shap_cap[shap_key]["top_features"][0]["feature"]
 
         daily_trend = info.get("daily_trend", 0)
+        months      = info.get("months_to_threshold")
+        time_str    = f"~{months:.1f} ay / ~{int(days)} gün" if months else f"~{int(days)} gün"
         detail = (
             f"Mevcut {rule['label']}: {cur:.1f}{rule['unit']} (eşik: {thr}{rule['unit']}). "
             f"30 günlük medyan artış: +{daily_trend:.3f}{rule['unit']}/gün. "
-            f"Tahmini eşik tarihi: {est} (~{int(days)} gün)."
+            f"Tahmini eşik tarihi: {est} ({time_str})."
         )
         if top_feat:
             detail += f" En etkili SHAP özelliği: '{top_feat}'."
 
         recs.append({
-            "severity":       severity,
-            "category":       "KAPASİTE",
-            "title":          f"{rule['label']} — Tahmini Eşik Tarihi: {est}",
-            "detail":         detail,
-            "actions":        rule["suggestions"],
-            "estimated_date": est,
-            "days_remaining": int(days),
-            "timestamp":      ts_now,
+            "severity":         severity,
+            "category":         "KAPASİTE",
+            "title":            f"{rule['label']} — Tahmini Eşik Tarihi: {est}",
+            "detail":           detail,
+            "actions":          rule["suggestions"],
+            "estimated_date":   est,
+            "days_remaining":   int(days),
+            "months_remaining": round(months, 1) if months else None,
+            "timestamp":        ts_now,
         })
 
     return recs
@@ -428,10 +431,15 @@ def _write_txt_report(path, recs, cap_summary, err_summary):
             cur  = info.get("current_value", "?")
             thr  = info.get("threshold", "?")
             est  = info.get("estimated_date")
-            days = info.get("days_to_threshold")
-            stb  = info.get("stable", False)
-            trend = info.get("daily_trend", 0)
-            status = "Kararlı trend (>180 gün)" if (stb or days is None) else f"Tahmini eşik: {est} (~{int(days)} gün)"
+            days   = info.get("days_to_threshold")
+            months = info.get("months_to_threshold")
+            stb    = info.get("stable", False)
+            trend  = info.get("daily_trend", 0)
+            if stb or days is None:
+                status = "Kararlı trend (>180 gün)"
+            else:
+                time_str = f"~{months:.1f} ay / ~{int(days)} gün" if months else f"~{int(days)} gün"
+                status = f"Tahmini eşik: {est} ({time_str})"
             f.write(f"  {lbl}: %{cur:.1f} → Eşik %{thr} | +{trend:.3f}%/gün | {status}\n")
 
         f.write("\n── 7 GÜNLÜK LOG ÖZETİ ──────────────────────────────────────────\n")

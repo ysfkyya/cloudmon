@@ -62,10 +62,7 @@ def file_size_kb(path: str) -> str:
 
 
 def results_exist() -> bool:
-    return (
-        os.path.exists(os.path.join(REP_DIR, "capacity_results.json"))
-        and os.path.exists(os.path.join(REP_DIR, "health_results.json"))
-    )
+    return os.path.exists(os.path.join(REP_DIR, "capacity_results.json"))
 
 
 def fmt_df(df: pd.DataFrame, fmt: dict) -> pd.DataFrame:
@@ -145,7 +142,7 @@ with st.sidebar:
     st.divider()
     if results_exist():
         try:
-            m = pd.read_csv(os.path.join(DATA_DIR, "raw", "metrics.csv"),
+            m = pd.read_csv(os.path.join(DATA_DIR, "synthetic", "metrics.csv"),
                             usecols=["timestamp"])
             st.caption(f"📅 {m['timestamp'].iloc[0][:10]}")
             st.caption(f"   → {m['timestamp'].iloc[-1][:10]}")
@@ -654,12 +651,12 @@ if page.startswith("🏠"):
     # ── Canlı durum kartları ──────────────────────────────────────────────────
     if results_exist():
         try:
-            mdf  = pd.read_csv(os.path.join(DATA_DIR, "raw", "metrics.csv"))
+            mdf  = pd.read_csv(os.path.join(DATA_DIR, "synthetic", "metrics.csv"))
             last = mdf.iloc[-1]
             prev = mdf.iloc[-25]
             c1,c2,c3,c4,c5 = st.columns(5)
-            c1.metric("CPU",    f"{last['cpu_usage_percent']:.1f}%",
-                      f"{last['cpu_usage_percent']-prev['cpu_usage_percent']:+.1f}%")
+            c1.metric("vCPU",   f"{last['vcpu_usage_percent']:.1f}%",
+                      f"{last['vcpu_usage_percent']-prev['vcpu_usage_percent']:+.1f}%")
             c2.metric("Bellek", f"{last['memory_usage_percent']:.1f}%",
                       f"{last['memory_usage_percent']-prev['memory_usage_percent']:+.1f}%")
             c3.metric("Disk",   f"{last['disk_usage_percent']:.1f}%",
@@ -804,7 +801,7 @@ if page.startswith("🏠"):
 
             st.markdown("**Üretilen Metrik Sütunları:**")
             st.dataframe(pd.DataFrame([
-                {"Sütun": "cpu_usage_percent",   "Birim": "%",    "Aralık": "2–99"},
+                {"Sütun": "vcpu_usage_percent",  "Birim": "%",    "Aralık": "2–99"},
                 {"Sütun": "memory_usage_percent","Birim": "%",    "Aralık": "10–99"},
                 {"Sütun": "disk_usage_percent",  "Birim": "%",    "Aralık": "20–99"},
                 {"Sütun": "api_requests_per_hour","Birim":"istek/s","Aralık": "50–200K"},
@@ -893,15 +890,15 @@ if page.startswith("🏠"):
         st.subheader("Veri Boyutları ve Dosya Yapısı")
 
         if results_exist():
-            raw_dir  = os.path.join(DATA_DIR, "raw")
+            raw_dir  = os.path.join(DATA_DIR, "synthetic")
             proc_dir = os.path.join(DATA_DIR, "processed")
 
             # Dosya tablosu
             files = [
-                ("data/raw/metrics.csv",    "Ham metrik verileri",          raw_dir,  "metrics.csv"),
-                ("data/raw/log_features.csv","Saatlik log özellik agregasyonu", raw_dir, "log_features.csv"),
-                ("data/raw/raw_logs.csv",   "Ham log satırı örnekleri",     raw_dir,  "raw_logs.csv"),
-                ("data/processed/features.csv","Türetilmiş özellik matrisi", proc_dir, "features.csv"),
+                ("data/synthetic/metrics.csv",     "Metrik verileri (vCPU / Bellek / Disk)",  raw_dir,  "metrics.csv"),
+                ("data/synthetic/log_features.csv","Saatlik log özellik agregasyonu",          raw_dir,  "log_features.csv"),
+                ("data/synthetic/raw_logs.csv",    "Ham log satırı örnekleri",                raw_dir,  "raw_logs.csv"),
+                ("data/processed/features.csv",    "Türetilmiş özellik matrisi",              proc_dir, "features.csv"),
             ]
 
             rows = []
@@ -959,7 +956,7 @@ if page.startswith("🏠"):
                 "Zirve":        inc["peak"],
                 "Bitiş":        inc["end"],
                 "Öncü (gün)":   inc["buildup_days"],
-                "CPU +":        f"{inc['cpu_spike']:.0f}%",
+                "vCPU +":       f"{inc['vcpu_spike']:.0f}%",
                 "Bellek +":     f"{inc['memory_spike']:.0f}%",
                 "Gecikme +":    f"{int(inc['latency_spike'])} ms",
                 "Hata +":       f"{inc['error_spike']:.0f}%",
@@ -982,7 +979,7 @@ if page.startswith("🏠"):
                     "log_generator.generate_log_features() → metrikle korele saatlik log sayımları",
                     "log_generator.generate_raw_logs() → 5,000 gerçekçi log satırı örneği",
                 ],
-                "cikti": "data/raw/ altında 3 CSV dosyası",
+                "cikti": "data/synthetic/ altında 3 CSV dosyası (metrics · log_features · raw_logs)",
                 "sure": "~5 sn",
                 "not": "SEED=42 olduğu için her çalıştırmada özdeş veri üretilir. "
                        "Config'i değiştirirseniz (tarih, incident, eşik) farklı veri elde edilir.",
@@ -1006,15 +1003,16 @@ if page.startswith("🏠"):
             {
                 "no": "3️⃣",
                 "ad": "Kapasite Tahmini Modelleri",
-                "girdi": "features.csv — eğitim: Eyl 2025–Mar 2026 / test: Nis–Haz 2026",
+                "girdi": "features.csv — eğitim: Oca 2025–Mar 2026 (15 ay) / test: Nis–Haz 2026 (3 ay)",
                 "islem": [
-                    "3 kaynak (CPU, Bellek, Disk) × 2 ufuk (24h, 72h) = 6 hedef değişken",
-                    "Her hedef için LinearRegression, RandomForest, GradientBoosting eğitilir",
-                    "Toplam 18 model — çapraz doğrulama yok, zamansal bölünmüş test seti",
-                    "LR için StandardScaler; RF/GBT için ölçekleme gerekmez",
+                    "3 kaynak (vCPU, Bellek, Disk) × 3 ufuk (24h, 72h, 168h) = 9 hedef değişken",
+                    "Her hedef için 7 model: LR, RF, GBT, XGBoost, LightGBM, CatBoost, MLP",
+                    "Toplam 63 model — çapraz doğrulama yok, zamansal bölünmüş test seti",
+                    "LR ve MLP için StandardScaler; ağaç tabanlı modeller ham özellik kullanır",
+                    "En düşük RMSE → 'yıldızlı' model → gelecek tahmini (kaç ay/gün kaldı)",
                 ],
-                "cikti": "18 .pkl model, capacity_results.json, 2 PNG grafik",
-                "sure": "~8 dk (GBT n_estimators=200 nedeniyle)",
+                "cikti": "63 .pkl model, capacity_results.json, 3 PNG grafik (karşılaştırma / tahmin / artık)",
+                "sure": "~15-20 dk (7 model × 9 hedef, GBT/XGBoost/CatBoost n_estimators=200)",
                 "not": "Disk tahmininde R² negatif: disk monoton artar, "
                        "test dönemindeki ani spike'lar eğitim setinde görülmemiştir.",
             },
@@ -1157,7 +1155,7 @@ elif page.startswith("📊"):
                 "Başlangıç":   inc["start"],
                 "Bitiş":       inc["end"],
                 "Öncü (gün)":  inc["buildup_days"],
-                "CPU +":       f"{inc['cpu_spike']:.0f}%",
+                "vCPU +":      f"{inc['vcpu_spike']:.0f}%",
                 "Bellek +":    f"{inc['memory_spike']:.0f}%",
             } for inc in INCIDENTS])
             st.dataframe(inc_df, width='stretch', hide_index=True)
@@ -1175,9 +1173,9 @@ elif page.startswith("📊"):
 
     with tab3:
         try:
-            mc  = os.path.join(DATA_DIR, "raw", "metrics.csv")
-            lc  = os.path.join(DATA_DIR, "raw", "log_features.csv")
-            rc  = os.path.join(DATA_DIR, "raw", "raw_logs.csv")
+            mc  = os.path.join(DATA_DIR, "synthetic", "metrics.csv")
+            lc  = os.path.join(DATA_DIR, "synthetic", "log_features.csv")
+            rc  = os.path.join(DATA_DIR, "synthetic", "raw_logs.csv")
             c1,c2,c3 = st.columns(3)
             c1.metric("Metrik Satırı",   f"{len(pd.read_csv(mc)):,}")
             c2.metric("Log Özellik",     f"{len(pd.read_csv(lc)):,}")
@@ -1199,13 +1197,13 @@ elif page.startswith("📊"):
 elif page.startswith("📈"):
     from config import FORECAST_HORIZONS, TRAIN_END_DATE, END_DATE, START_DATE
     st.title("📈 Kapasite Tahmini")
-    n_models   = 3 * len(FORECAST_HORIZONS)  # 3 kaynak × N ufuk
+    n_algo     = 7  # LR, RF, GBT, XGBoost, LightGBM, CatBoost, MLP
     test_period = f"{pd.Timestamp(TRAIN_END_DATE).strftime('%b %Y')} – {pd.Timestamp(END_DATE).strftime('%b %Y')}"
     horizon_str = " / ".join(f"{h}h" for h in FORECAST_HORIZONS)
     st.markdown(f"""<div class="box">
-    <b>3 model</b> (LR, RF, GBT) × <b>3 kaynak</b> (CPU, Bellek, Disk) × <b>{len(FORECAST_HORIZONS)} ufuk</b> ({horizon_str}) = {3 * 3 * len(FORECAST_HORIZONS)} model.
-    Eğitim: {pd.Timestamp(START_DATE).strftime('%b %Y')} – {pd.Timestamp(TRAIN_END_DATE).strftime('%b %Y')} · Test: {test_period} (zamansal bölünmüş).
-    ★ simgesi: her kaynak–ufuk çifti için en düşük RMSE.
+    <b>{n_algo} model</b> (LR, RF, GBT, XGBoost, LightGBM, CatBoost, MLP) × <b>3 kaynak</b> (vCPU, Bellek, Disk) × <b>{len(FORECAST_HORIZONS)} ufuk</b> ({horizon_str}) = <b>{n_algo * 3 * len(FORECAST_HORIZONS)} model</b>.<br>
+    Eğitim: {pd.Timestamp(START_DATE).strftime('%b %Y')} – {pd.Timestamp(TRAIN_END_DATE).strftime('%b %Y')} (15 ay) · Test: {test_period} (3 ay, zamansal bölünmüş).<br>
+    ★ simgesi: her kaynak–ufuk çifti için en düşük RMSE'ye sahip model. Gelecek tahmini bu modelle yapılır.
     </div>""", unsafe_allow_html=True)
 
     cap = load_json("capacity_results.json")
@@ -1214,7 +1212,7 @@ elif page.startswith("📈"):
         st.stop()
 
     _res_tr = {
-        "cpu_usage_percent":    "CPU (%)",
+        "vcpu_usage_percent":   "vCPU (%)",
         "memory_usage_percent": "Bellek (%)",
         "disk_usage_percent":   "Disk (%)",
     }
@@ -1375,9 +1373,9 @@ elif page.startswith("🔍"):
 
     with tab_cpu:
         h = st.radio("Ufuk", _shap_horizons, horizontal=True, key="sh_cpu")
-        _shap_sec("cpu_usage_percent", h, f"CPU — {h}s ufku",
-                  "CPU tahmini için <b>kısa vadeli hareketli ortalama</b> (cpu_rmean_3h, cpu_lag_1h) "
-                  "en yüksek SHAP değerini alır: CPU kullanımı güçlü süreklilik gösterir. "
+        _shap_sec("vcpu_usage_percent", h, f"vCPU — {h}s ufku",
+                  "vCPU tahmini için <b>kısa vadeli hareketli ortalama</b> (vcpu_rmean_3h, vcpu_lag_1h) "
+                  "en yüksek SHAP değerini alır: vCPU kullanımı güçlü süreklilik gösterir. "
                   "Incident dönemlerinde <b>log hata sayımları ve gecikme metrikleri</b> devreye girer.")
 
     with tab_mem:
@@ -1448,24 +1446,26 @@ elif page.startswith("💡"):
     if cap_sum:
         st.subheader("Kapasite Dolum Tahmini")
         _cap_labels = {
-            "cpu_usage_percent":    ("CPU", "#e53e3e"),
+            "vcpu_usage_percent":   ("vCPU", "#e53e3e"),
             "memory_usage_percent": ("Bellek", "#f59e0b"),
             "disk_usage_percent":   ("Disk", "#3b82f6"),
         }
         cc1, cc2, cc3 = st.columns(3)
         for col_w, (col_key, (lbl, clr)) in zip([cc1, cc2, cc3], _cap_labels.items()):
-            info  = cap_sum.get(col_key, {})
-            cur   = info.get("current_value", "?")
-            est   = info.get("estimated_date")
-            days  = info.get("days_to_threshold")
-            stb   = info.get("stable", False)
-            trend = info.get("daily_trend", 0)
-            meth  = info.get("method", "")
+            info   = cap_sum.get(col_key, {})
+            cur    = info.get("current_value", "?")
+            est    = info.get("estimated_date")
+            days   = info.get("days_to_threshold")
+            months = info.get("months_to_threshold")
+            stb    = info.get("stable", False)
+            trend  = info.get("daily_trend", 0)
+            meth   = info.get("method", "")
             with col_w:
                 if stb or est is None:
                     col_w.metric(f"📅 {lbl} Bitiş", "Kararlı", f"+{trend:.3f}%/gün")
                 else:
-                    col_w.metric(f"📅 {lbl} Bitiş", est, f"~{int(days)} gün · %{cur:.1f} şu an")
+                    time_str = f"~{months:.1f} ay (~{int(days)} gün)" if months else f"~{int(days)} gün"
+                    col_w.metric(f"📅 {lbl} Bitiş", est, f"{time_str} · %{cur:.1f} şu an")
                 if meth:
                     st.caption(f"Yöntem: {meth}")
         st.divider()
@@ -1504,7 +1504,10 @@ elif page.startswith("💡"):
         cat_label = _cat.get(rec.get("category",""), rec.get("category",""))
         est_line  = ""
         if rec.get("estimated_date"):
-            est_line = f'<span style="color:#e53e3e;font-size:.85rem;"> 📅 Tahmini eşik: <b>{rec["estimated_date"]}</b></span>'
+            _d = rec.get("days_remaining")
+            _m = rec.get("months_remaining")
+            _t = f" (~{_m:.1f} ay / {_d} gün)" if (_m is not None and _d is not None) else (f" (~{_d} gün)" if _d is not None else "")
+            est_line = f'<span style="color:#e53e3e;font-size:.85rem;"> 📅 Tahmini eşik: <b>{rec["estimated_date"]}</b>{_t}</span>'
         st.markdown(f"""
         <div class="{css}">
           <div style="margin-bottom:6px;">
@@ -1580,9 +1583,9 @@ elif page.startswith("🤖"):
 
         with st.spinner("Veriler hazırlanıyor…"):
             try:
-                metrics_df = pd.read_csv(os.path.join(DATA_DIR, "raw", "metrics.csv"),
+                metrics_df = pd.read_csv(os.path.join(DATA_DIR, "synthetic", "metrics.csv"),
                                          parse_dates=["timestamp"])
-                log_df     = pd.read_csv(os.path.join(DATA_DIR, "raw", "log_features.csv"),
+                log_df     = pd.read_csv(os.path.join(DATA_DIR, "synthetic", "log_features.csv"),
                                          parse_dates=["timestamp"])
                 feature_df = build_feature_matrix(metrics_df, log_df)
 
@@ -1619,7 +1622,6 @@ elif page.startswith("🤖"):
         with st.spinner("LLM modelleri sorgulanıyor…"):
             result = advisor.get_recommendations(
                 feature_df,
-                shap_health,
                 shap_cap,
                 capacity_results=cap_res,
                 recommendations=saved_recs,
@@ -1639,7 +1641,7 @@ elif page.startswith("🤖"):
         if ms:
             st.subheader("Sistem Bağlamı")
             c1, c2, c3, c4, c5 = st.columns(5)
-            c1.metric("CPU (ort)",     f"%{ms.get('cpu_mean', 0):.1f}")
+            c1.metric("vCPU (ort)",    f"%{ms.get('vcpu_mean', 0):.1f}")
             c2.metric("Bellek (ort)",  f"%{ms.get('mem_mean', 0):.1f}")
             c3.metric("Disk (ort)",    f"%{ms.get('disk_mean', 0):.1f}")
             c4.metric("Latency (ort)", f"{ms.get('latency_mean', 0):.0f} ms")
@@ -1648,16 +1650,18 @@ elif page.startswith("🤖"):
         if cdates:
             st.subheader("Kapasite Bitiş Tahminleri")
             dc1, dc2, dc3 = st.columns(3)
-            _dl = {"cpu_usage_percent": "CPU", "memory_usage_percent": "Bellek", "disk_usage_percent": "Disk"}
+            _dl = {"vcpu_usage_percent": "vCPU", "memory_usage_percent": "Bellek", "disk_usage_percent": "Disk"}
             for col_w, (col_key, lbl) in zip([dc1, dc2, dc3], _dl.items()):
-                info = cdates.get(col_key, {})
-                est  = info.get("estimated_date")
-                days = info.get("days_to_threshold")
-                stb  = info.get("stable", False)
+                info   = cdates.get(col_key, {})
+                est    = info.get("estimated_date")
+                days   = info.get("days_to_threshold")
+                months = info.get("months_to_threshold")
+                stb    = info.get("stable", False)
                 if stb or est is None:
                     col_w.metric(f"📅 {lbl} Bitiş", "Kararlı")
                 else:
-                    col_w.metric(f"📅 {lbl} Bitiş", est, f"~{int(days)} gün")
+                    time_str = f"~{months:.1f} ay (~{int(days)} gün)" if months else f"~{int(days)} gün"
+                    col_w.metric(f"📅 {lbl} Bitiş", est, time_str)
 
         if staj.get("active"):
             s = staj["active"]

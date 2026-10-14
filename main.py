@@ -5,7 +5,7 @@ Pipeline adımları:
   1. Veri üretimi      : 18 aylık sentetik metrik (vCPU 30→1598) + zengin log verisi
   2. Log işleme hattı  : 4 aşamalı log analizi (ayrıştırma → agregasyon → anomali → örüntü)
   3. Özellik müh.      : rolling, lag, delta, zaman ve log özellikleri
-  4. Kapasite tahmini  : vCPU/Bellek/Disk için 24h/72h/168h regresyon modelleri
+  4. Kapasite tahmini  : 7 model × 3 kaynak × 3 ufuk (24h/72h/168h) = 63 regresyon modeli
   5. SHAP analizi      : Açıklanabilirlik ve özellik önem sıralaması
   6. LLM Önerileri     : Metrik + log analizi çıkarımları LLM'e beslenerek proaktif öneriler
 
@@ -26,10 +26,10 @@ warnings.filterwarnings("ignore")
 BASE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE)
 
-from config import DATA_DIR, RESULTS_DIR
+from config import DATA_DIR, SYNTHETIC_DIR, RESULTS_DIR
 
 for d in [
-    os.path.join(DATA_DIR, "raw"),
+    SYNTHETIC_DIR,
     os.path.join(DATA_DIR, "processed", "models"),
     os.path.join(RESULTS_DIR, "figures"),
     os.path.join(RESULTS_DIR, "reports"),
@@ -73,9 +73,9 @@ def main() -> None:
     log_df     = generate_log_features(metrics_df)
     raw_logs   = generate_raw_logs(metrics_df, n_samples=8000)
 
-    metrics_df.to_csv(os.path.join(DATA_DIR, "raw", "metrics.csv"),      index=False)
-    log_df.to_csv(    os.path.join(DATA_DIR, "raw", "log_features.csv"), index=False)
-    raw_logs.to_csv(  os.path.join(DATA_DIR, "raw", "raw_logs.csv"),     index=False)
+    metrics_df.to_csv(os.path.join(SYNTHETIC_DIR, "metrics.csv"),      index=False)
+    log_df.to_csv(    os.path.join(SYNTHETIC_DIR, "log_features.csv"), index=False)
+    raw_logs.to_csv(  os.path.join(SYNTHETIC_DIR, "raw_logs.csv"),     index=False)
 
     vcpu_start = int(metrics_df["vcpu_used"].iloc[0])
     vcpu_end   = int(metrics_df["vcpu_used"].iloc[-1])
@@ -233,11 +233,14 @@ def _print_summary(cap_res, recs, log_insights, t_total):
         "disk_usage_percent":   "Disk  ",
     }
 
-    print("\n  Kapasite Tahmin Sonuçları (En İyi Model — RMSE Bazlı):")
+    n_models = len(cap_res) * 7  # 9 hedef × 7 model
+    print(f"\n  Kapasite Tahmin Sonuçları (En İyi Model — RMSE Bazlı)  [{n_models} model eğitildi]:")
     for h in FORECAST_HORIZONS:
         print(f"\n    Ufuk: {h} saat")
         for col in CAPACITY_TARGETS:
             key    = f"{col}_{h}h"
+            if key not in cap_res:
+                continue
             models = cap_res[key]["models"]
             best_m = min(models.items(), key=lambda x: x[1]["RMSE"])[0]
             m      = models[best_m]
