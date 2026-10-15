@@ -590,21 +590,27 @@ LSTM/GRU eklenmesi bu mimarinin tamamını değiştirirdi: ayrı veri loader,
 ```
 1. capacity_results'tan 24s ufkunda en iyi model seçilir (en düşük RMSE)
        ↓
-2. Son feature satırından başlanır (lag, rolling, delta, zaman özellikleri)
+2. Tüm 1.5 yıllık gerçek veri geçmişi ile hist tamponu başlatılır — kırpılmaz
+   (Disk gibi yavaş büyüyen kaynaklar için büyüme trendi böylece korunur)
        ↓
 3. Model → t+24h değerini tahmin eder
        ↓
-4. Lag/rolling/delta özellikleri tahmin edilen değerle güncellenir
-   Zaman özellikleri gerçek takvim tarihine çekilir
+4. Tahmin hist'e eklenir; lag/rolling/delta özellikleri bu tam geçmişten yeniden hesaplanır
+   Zaman özellikleri gerçek takvim tarihine güncellenir
        ↓
 5. Tahmin ≥ eşik → gün ve ay (gün / 30.44) döndürülür
-   Değilse → adım tekrar (maks 2 yıl / 730 adım)
+   Değilse → adım tekrar (maks 10 yıl / 3 650 adım — disk gibi yavaş kaynaklar için)
 ```
+
+**Dual eşik desteği:** `predict_days_to_threshold(thr=...)` parametresiyle hem konfigüre eşik
+(vCPU %90 · Bellek %88 · Disk %85) hem de fiziksel dolum (%100) tarihi hesaplanabilir.
+Dashboard "📅 Kapasite Dolum Tarihleri" sekmesi her iki tarihi tablo ve kartlar halinde gösterir.
 
 **Örnek çıktı:**
 ```
-vCPU  : %79.6 → Eşik %90.0 | +0.275%/gün | 2026-09-12 (~2.4 ay / ~74 gün)
-Bellek: %85.5 → Eşik %88.0 | +0.151%/gün | 2026-08-15 (~1.5 ay / ~46 gün)
+vCPU  : %79.9 → Eşik %90.0 | 2026-09-12 (~2.4 ay / ~74 gün)  | %100: 2027-02-08 | ML-XGBoost
+Bellek: %84.0 → Eşik %88.0 | 2026-08-20 (~1.7 ay / ~51 gün)  | %100: 2027-07-14 | ML-LR
+Disk  : %78.0 → Eşik %85.0 | 2027-03-10 (~4.8 ay / ~147 gün) | %100: 2028-11-05 | ML-LightGBM
 ```
 
 ### Değerlendirme Metrikleri
@@ -831,7 +837,7 @@ cloudmon/
 │   │   └── feature_engineering.py        # 272 sütun + early_warning_composite
 │   │
 │   ├── models/
-│   │   └── capacity_predictor.py         # 27 regresyon modeli (vCPU/Bellek/Disk)
+│   │   └── capacity_predictor.py         # 42 regresyon modeli; iteratif tahmin: tam geçmiş + 10 yıl + dual eşik (90%/100%)
 │   │
 │   ├── explainability/
 │   │   └── shap_explainer.py             # TreeExplainer + LinearExplainer + görselleştirme

@@ -287,13 +287,17 @@ def _plot_residuals(results: dict) -> None:
 
 def predict_days_to_threshold(feature_df: pd.DataFrame,
                                capacity_results: dict,
-                               col: str = "disk_usage_percent") -> dict:
+                               col: str = "disk_usage_percent",
+                               thr: float = None) -> dict:
     """
-    24s ufuklu en iyi ML modeli ile iteratif ileriye tahmin yapar.
-    Eşiğe ulaşma tarihini ve günlük trendi döndürür.
+    24s ufuklu en iyi ML modeli (RMSE bazlı) ile iteratif ileriye tahmin yapar.
+
+    thr=None  → config.THRESHOLDS'tan alınır (90/88/85%)
+    thr=100.0 → fiziksel dolum tarihi hesaplanır
     """
     last_ts = feature_df.index[-1]
-    thr     = THRESHOLDS.get(col, 90.0)
+    if thr is None:
+        thr = THRESHOLDS.get(col, 90.0)
     current = float(feature_df[col].dropna().iloc[-1])
 
     if current >= thr:
@@ -325,8 +329,10 @@ def predict_days_to_threshold(feature_df: pd.DataFrame,
     scaler        = pkg.get("scaler")
     feature_names = list(pkg["feature_names"])
 
-    hist    = feature_df[col].dropna().values[-168:].tolist()
-    base    = {}
+    # Tüm 1.5 yıllık gerçek veri — kırpılmaz; lag/delta özellikleri
+    # büyüme trendini korur (disk gibi yavaş kaynaklarda kritik)
+    hist  = feature_df[col].dropna().values.tolist()
+    base  = {}
     for f in feature_names:
         if f in feature_df.columns:
             v = feature_df[f].dropna()
@@ -335,20 +341,21 @@ def predict_days_to_threshold(feature_df: pd.DataFrame,
             base[f] = 0.0
 
     STEP_H    = 24
-    MAX_STEPS = 730 * 24 // STEP_H
+    MAX_STEPS = 365 * 10   # 10 yıl — yavaş büyüyen kaynaklar için yeterli
     elapsed_h = 0
 
     for _ in range(MAX_STEPS):
         elapsed_h += STEP_H
         pred_ts = last_ts + pd.Timedelta(hours=elapsed_h)
         row = dict(base)
+        n   = len(hist)
 
         if col in feature_names:
             row[col] = hist[-1]
         for lag in [1, 6, 24, 48, 168]:
             f = f"{col}_lag_{lag}h"
             if f in feature_names:
-                row[f] = hist[max(0, len(hist) - lag)]
+                row[f] = hist[max(0, n - lag)]
         for w in [3, 6, 12, 24, 168]:
             f = f"{col}_rmean_{w}h"
             if f in feature_names:
@@ -361,7 +368,7 @@ def predict_days_to_threshold(feature_df: pd.DataFrame,
         for d in [1, 6, 24]:
             f = f"{col}_delta_{d}h"
             if f in feature_names:
-                row[f] = hist[-1] - hist[max(0, len(hist) - d)]
+                row[f] = hist[-1] - hist[max(0, n - d)]
         _time_map = {
             "hour_of_day":      pred_ts.hour,
             "day_of_week":      pred_ts.dayofweek,
@@ -380,13 +387,11 @@ def predict_days_to_threshold(feature_df: pd.DataFrame,
             X = scaler.transform(X)
 
         predicted = float(np.clip(model.predict(X)[0], 0.0, 100.0))
-        hist.append(predicted)
-        if len(hist) > 168:
-            hist = hist[-168:]
+        hist.append(predicted)   # kırpılmaz — tam geçmiş korunur
 
         if predicted >= thr:
-            days   = elapsed_h / 24.0
-            months = round(days / 30.44, 1)
+            days        = elapsed_h / 24.0
+            months      = round(days / 30.44, 1)
             daily_trend = (predicted - current) / days if days > 0 else 0.0
             return {
                 "resource":            col,
@@ -401,6 +406,7 @@ def predict_days_to_threshold(feature_df: pd.DataFrame,
                 "as_of":               str(last_ts),
             }
 
+    # 10 yıl içinde eşiğe ulaşmadı — gerçekten kararlı veya azalıyor
     return {
         "resource": col, "current_value": round(current, 2),
         "threshold": thr, "days_to_threshold": None, "months_to_threshold": None,
@@ -411,26 +417,27 @@ def predict_days_to_threshold(feature_df: pd.DataFrame,
 
 
 def _threshold_fallback(feature_df, col, last_ts, thr, current):
-    vals   = feature_df[col].dropna().values
-    if len(vals) < 48:
+    """Model dosyası bulunamadığında devreye girer. Tüm geçmişe OLS uydurur."""
+    vals = feature_df[col].dropna().values
+    if len(vals) < 168:
         return {"resource": col, "current_value": round(current, 2), "threshold": thr,
                 "days_to_threshold": None, "months_to_threshold": None,
                 "estimated_date": None, "stable": True,
-                "daily_trend": 0.0, "method": "fallback", "as_of": str(last_ts)}
-    window  = min(720, len(vals) - 24)
-    recent  = vals[-window:]
-    changes = np.array([recent[i + 24] - recent[i] for i in range(len(recent) - 24)])
-    slope   = float(np.median(changes))
-    if slope < 0.005:
+                "daily_trend": 0.0, "method": "OLS-fallback", "as_of": str(last_ts)}
+    x = np.arange(len(vals), dtype=float)
+    slope, _ = np.polyfit(x, vals, 1)
+    daily_slope = slope * 24
+    if slope <= 0:
         return {"resource": col, "current_value": round(current, 2), "threshold": thr,
                 "days_to_threshold": None, "months_to_threshold": None,
                 "estimated_date": None, "stable": True,
-                "daily_trend": round(slope, 4), "method": "fallback", "as_of": str(last_ts)}
-    days   = (thr - current) / slope
-    months = round(days / 30.44, 1)
-    target = last_ts + pd.Timedelta(days=days)
+                "daily_trend": round(daily_slope, 4), "method": "OLS-fallback",
+                "as_of": str(last_ts)}
+    hours_to_thr = (thr - current) / slope
+    days         = hours_to_thr / 24.0
+    months       = round(days / 30.44, 1)
+    target       = last_ts + pd.Timedelta(hours=hours_to_thr)
     return {"resource": col, "current_value": round(current, 2), "threshold": thr,
-            "daily_trend": round(slope, 4), "days_to_threshold": round(days, 0),
-            "months_to_threshold": months,
-            "estimated_date": str(target.date()), "stable": False,
-            "method": "fallback", "as_of": str(last_ts)}
+            "daily_trend": round(daily_slope, 4), "days_to_threshold": round(days, 0),
+            "months_to_threshold": months, "estimated_date": str(target.date()),
+            "stable": False, "method": "OLS-fallback", "as_of": str(last_ts)}

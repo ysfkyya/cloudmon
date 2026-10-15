@@ -1231,44 +1231,147 @@ elif page.startswith("📈"):
             })
     df_res = pd.DataFrame(rows)
 
-    horizons_in_results = sorted(set(int(v["horizon_h"]) for v in cap.values()))
-    horizon_tabs = st.tabs([f"{h} Saatlik Ufuk" for h in horizons_in_results])
+    outer_tab1, outer_tab2 = st.tabs(["📊 Model Karşılaştırma", "📅 Kapasite Dolum Tarihleri"])
 
-    for tab, horizon in zip(horizon_tabs, horizons_in_results):
-        with tab:
-            horizon_key = f"{horizon}s"
-            sub = df_res[df_res["Ufuk"] == horizon_key].drop(columns="Ufuk").copy()
-            best_set = set()
-            for kaynak in sub["Kaynak"].unique():
-                idx = sub[sub["Kaynak"] == kaynak]["RMSE"].idxmin()
-                best_set.add(idx)
-            sub[""] = sub.index.map(lambda i: "★ EN İYİ" if i in best_set else "")
-            st.dataframe(
-                sub,
-                column_config={
-                    "MAE":  st.column_config.NumberColumn("MAE",  format="%.3f"),
-                    "RMSE": st.column_config.NumberColumn("RMSE", format="%.3f"),
-                    "R²":   st.column_config.NumberColumn("R²",   format="%.4f"),
-                    "MAPE": st.column_config.NumberColumn("MAPE", format="%.2f"),
-                    "":     st.column_config.TextColumn("",       width="small"),
-                },
-                width='stretch', hide_index=True,
-            )
+    with outer_tab1:
+        horizons_in_results = sorted(set(int(v["horizon_h"]) for v in cap.values()))
+        horizon_tabs = st.tabs([f"{h} Saatlik Ufuk" for h in horizons_in_results])
 
-    st.markdown("""<div class="box">
-    <b>MAE</b>: Ortalama Mutlak Hata (puan) ·
-    <b>RMSE</b>: Kök Ortalama Kare Hata (büyük sapmaları cezalandırır) ·
-    <b>R²</b>: 1=mükemmel, 0=ortalama, negatif=ortalamadan kötü ·
-    <b>MAPE</b>: Yüzde bazlı hata<br>
-    Disk R²<0: monoton artış + test setindeki spike'lar eğitim setinde görülmemiş → lineer ekstrapolasyon tamamlayıcı olarak kullanılır.
-    </div>""", unsafe_allow_html=True)
+        for tab, horizon in zip(horizon_tabs, horizons_in_results):
+            with tab:
+                horizon_key = f"{horizon}s"
+                sub = df_res[df_res["Ufuk"] == horizon_key].drop(columns="Ufuk").copy()
+                best_set = set()
+                for kaynak in sub["Kaynak"].unique():
+                    idx = sub[sub["Kaynak"] == kaynak]["RMSE"].idxmin()
+                    best_set.add(idx)
+                sub[""] = sub.index.map(lambda i: "★ EN İYİ" if i in best_set else "")
+                st.dataframe(
+                    sub,
+                    column_config={
+                        "MAE":  st.column_config.NumberColumn("MAE",  format="%.3f"),
+                        "RMSE": st.column_config.NumberColumn("RMSE", format="%.3f"),
+                        "R²":   st.column_config.NumberColumn("R²",   format="%.4f"),
+                        "MAPE": st.column_config.NumberColumn("MAPE", format="%.2f"),
+                        "":     st.column_config.TextColumn("",       width="small"),
+                    },
+                    width='stretch', hide_index=True,
+                )
 
-    show_image(fig_path("capacity_forecasts.png"),
-               "Gerçek (mavi) ve tahmin (kırmızı kesikli). Her satır bir kaynak.")
-    show_image(fig_path("capacity_model_comparison.png"),
-               "Her kaynak için üç modelin RMSE karşılaştırması.")
-    show_image(fig_path("capacity_residuals.png"),
-               "Hata dağılımı histogramı: sıfır hata (kırmızı kesikli) etrafında simetrik dağılım iyi kalibrasyonu gösterir. Turuncu noktalı çizgi ort. hatayı gösterir.")
+        st.markdown("""<div class="box">
+        <b>MAE</b>: Ortalama Mutlak Hata (puan) ·
+        <b>RMSE</b>: Kök Ortalama Kare Hata (büyük sapmaları cezalandırır) ·
+        <b>R²</b>: 1=mükemmel, 0=ortalama, negatif=ortalamadan kötü ·
+        <b>MAPE</b>: Yüzde bazlı hata<br>
+        Disk R²<0: monoton artış + test setindeki spike'lar eğitim setinde görülmemiş → lineer ekstrapolasyon tamamlayıcı olarak kullanılır.
+        </div>""", unsafe_allow_html=True)
+
+        show_image(fig_path("capacity_forecasts.png"),
+                   "Gerçek (mavi) ve tahmin (kırmızı kesikli). Her satır bir kaynak.")
+        show_image(fig_path("capacity_model_comparison.png"),
+                   "Her kaynak için üç modelin RMSE karşılaştırması.")
+        show_image(fig_path("capacity_residuals.png"),
+                   "Hata dağılımı histogramı: sıfır hata (kırmızı kesikli) etrafında simetrik dağılım iyi kalibrasyonu gösterir. Turuncu noktalı çizgi ort. hatayı gösterir.")
+
+    with outer_tab2:
+        st.markdown("""<div class="box">
+        Her kaynak için <b>en düşük RMSE</b>'ye sahip 24s ufuklu ML modeli seçilir ve iteratif
+        ileriye tahmin yapılır. Tam 1.5 yıllık veri geçmişi kullanılır — kırpılmaz —
+        böylece disk gibi yavaş büyüyen kaynaklar da doğru büyüme trendi korunur. Maks. 10 yıl ileri bakılır.<br>
+        <b>Konfigüre Eşik:</b> vCPU %90 · Bellek %88 · Disk %85 &nbsp;|&nbsp;
+        <b>%100 Tarihi:</b> Fiziksel kapasitenin tamamen dolacağı tahmini an
+        </div>""", unsafe_allow_html=True)
+
+        with st.spinner("ML modelleri ile eşik tarihleri hesaplanıyor…"):
+            try:
+                sys.path.insert(0, BASE)
+                from src.preprocessing.feature_engineering import build_feature_matrix
+                from src.models.capacity_predictor import predict_days_to_threshold
+
+                _metrics_path = os.path.join(DATA_DIR, "synthetic", "metrics.csv")
+                _log_path     = os.path.join(DATA_DIR, "synthetic", "log_features.csv")
+                if not os.path.exists(_metrics_path) or not os.path.exists(_log_path):
+                    st.warning("Veri dosyaları bulunamadı. Önce pipeline'ı çalıştırın.")
+                    st.stop()
+
+                _mdf = pd.read_csv(_metrics_path, parse_dates=["timestamp"])
+                _ldf = pd.read_csv(_log_path,     parse_dates=["timestamp"])
+                _fdf = build_feature_matrix(_mdf, _ldf)
+                if "timestamp" in _fdf.columns:
+                    _fdf = _fdf.set_index("timestamp")
+
+                _res_cfg = [
+                    ("vcpu_usage_percent",   "vCPU",   90.0, "#e53e3e"),
+                    ("memory_usage_percent", "Bellek", 88.0, "#f59e0b"),
+                    ("disk_usage_percent",   "Disk",   85.0, "#3b82f6"),
+                ]
+
+                def _fmt_thr(info):
+                    est  = info.get("estimated_date")
+                    days = info.get("days_to_threshold")
+                    stb  = info.get("stable", False)
+                    if stb or est is None:
+                        return "Kararlı (>10 yıl)", "—"
+                    d = int(days) if days else 0
+                    m = round(d / 30.44, 1)
+                    return est, f"~{m} ay (~{d} gün)"
+
+                _computed = []
+                for _col_key, _lbl, _cfg_thr, _clr in _res_cfg:
+                    _i_cfg = predict_days_to_threshold(_fdf, cap, col=_col_key)
+                    _i_100 = predict_days_to_threshold(_fdf, cap, col=_col_key, thr=100.0)
+                    _cfg_date, _cfg_rem   = _fmt_thr(_i_cfg)
+                    _d100_date, _d100_rem = _fmt_thr(_i_100)
+                    _cur  = _i_cfg.get("current_value", "?")
+                    _meth = _i_cfg.get("method", "")
+                    _computed.append((_col_key, _lbl, _cfg_thr, _clr,
+                                      _cur, _cfg_date, _cfg_rem, _d100_date, _d100_rem, _meth))
+
+                # ── Tablo ────────────────────────────────────────────────────────
+                _thr_rows = []
+                for _, _lbl, _cfg_thr, _, _cur, _cfg_date, _cfg_rem, _d100_date, _d100_rem, _meth in _computed:
+                    _thr_rows.append({
+                        "Kaynak":             _lbl,
+                        "Mevcut (%)":         round(float(_cur), 1) if isinstance(_cur, (int, float)) else _cur,
+                        "Konfigüre Eşik (%)": int(_cfg_thr),
+                        "Eşik Tarihi":        _cfg_date,
+                        "Eşiğe Kalan":        _cfg_rem,
+                        "%100 Tarihi":        _d100_date,
+                        "%100 Kalan":         _d100_rem,
+                        "Yöntem":             _meth,
+                    })
+                st.dataframe(pd.DataFrame(_thr_rows), width='stretch', hide_index=True)
+
+                # ── Kartlar ───────────────────────────────────────────────────────
+                st.divider()
+                _card_cols = st.columns(3)
+                for _cw, (_col_key, _lbl, _cfg_thr, _clr,
+                           _cur, _cfg_date, _cfg_rem, _d100_date, _d100_rem, _meth) in zip(_card_cols, _computed):
+                    _cur_str = f"%{round(float(_cur), 1)}" if isinstance(_cur, (int, float)) else str(_cur)
+                    with _cw:
+                        st.markdown(
+                            f'<div style="border-left:4px solid {_clr};padding:12px 14px;'
+                            f'border-radius:6px;background:#f9fafb;">'
+                            f'<div style="font-weight:700;font-size:1.05rem;color:{_clr};margin-bottom:10px;">{_lbl}</div>'
+                            f'<div style="font-size:.88rem;margin-bottom:6px;"><b>Mevcut:</b> {_cur_str}</div>'
+                            f'<div style="font-size:.88rem;margin-bottom:2px;">'
+                            f'<b>📅 Eşik (%{int(_cfg_thr)}):</b> '
+                            f'<span style="color:#dc2626;font-weight:600;">{_cfg_date}</span></div>'
+                            f'<div style="font-size:.8rem;color:#6b7280;margin:0 0 8px 10px;">{_cfg_rem}</div>'
+                            f'<div style="font-size:.88rem;margin-bottom:2px;">'
+                            f'<b>📅 Tam Dolum (%100):</b> '
+                            f'<span style="color:#7c3aed;font-weight:600;">{_d100_date}</span></div>'
+                            f'<div style="font-size:.8rem;color:#6b7280;margin:0 0 8px 10px;">{_d100_rem}</div>'
+                            f'<div style="font-size:.75rem;color:#9ca3af;">Yöntem: {_meth}</div>'
+                            f'</div>',
+                            unsafe_allow_html=True,
+                        )
+
+            except Exception as e:
+                st.error(f"Hesaplama hatası: {e}")
+                import traceback
+                with st.expander("Hata detayı"):
+                    st.code(traceback.format_exc(), language="python")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
