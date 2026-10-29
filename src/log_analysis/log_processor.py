@@ -30,7 +30,7 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-from config import INCIDENTS, RESULTS_DIR, START_DATE, END_DATE, STAJ_PERIODS
+from config import RESULTS_DIR, START_DATE, END_DATE
 
 # Log tipleri
 _ERROR_TYPES = [
@@ -261,19 +261,45 @@ def stage4_prefailure_patterns(log_df: pd.DataFrame) -> list:
 
     patterns = {}  # log_type → {lead_times, increases, count}
 
-    for inc in INCIDENTS:
-        inc_start     = pd.Timestamp(inc["start"])
-        buildup_start = inc_start - pd.Timedelta(days=inc["buildup_days"])
+    # Yüksek yük dönemlerini veriden otomatik tespit et (total_errors yüksek olan saatler)
+    if "total_errors" not in df2.columns:
+        return []
 
-        if inc_start not in df2.index and inc_start > df2.index[-1]:
-            continue
+    err_series  = df2["total_errors"].fillna(0)
+    err_mean    = float(err_series.mean())
+    err_std     = float(err_series.std())
+    spike_thr   = err_mean + 2.0 * err_std
+
+    # Spike dönemlerini bul
+    spike_mask  = err_series > spike_thr
+    spike_times = df2.index[spike_mask]
+
+    # Ardışık spike'ları gruplama
+    incidents_auto = []
+    if len(spike_times) > 0:
+        gap = pd.Timedelta(hours=12)
+        group_start = spike_times[0]
+        group_end   = spike_times[0]
+        for t in spike_times[1:]:
+            if t - group_end <= gap:
+                group_end = t
+            else:
+                incidents_auto.append((group_start, group_end))
+                group_start = t
+                group_end   = t
+        incidents_auto.append((group_start, group_end))
+
+    buildup_hours = 72
+    n_incidents   = max(len(incidents_auto), 1)
+
+    for inc_start, inc_end in incidents_auto:
+        buildup_start = inc_start - pd.Timedelta(hours=buildup_hours)
         if buildup_start < df2.index[0]:
             continue
 
-        # Buildup dönemi vs. önceki referans dönemi (eşit uzunluk)
         buildup_window = df2.loc[buildup_start:inc_start]
         ref_end        = buildup_start
-        ref_start      = ref_end - pd.Timedelta(days=inc["buildup_days"])
+        ref_start      = ref_end - pd.Timedelta(hours=buildup_hours)
         ref_window     = df2.loc[ref_start:ref_end]
 
         if len(buildup_window) < 6 or len(ref_window) < 6:
@@ -289,10 +315,9 @@ def stage4_prefailure_patterns(log_df: pd.DataFrame) -> list:
                 continue
 
             increase_pct = (buildup_mean - ref_mean) / ref_mean * 100.0
-            if increase_pct < 30.0:  # en az %30 artış
+            if increase_pct < 30.0:
                 continue
 
-            # Artışın gerçekleştiği saatten arızaya olan süre
             threshold = ref_mean * 1.5
             first_exceed = None
             for t_val, v in buildup_window[col].items():
@@ -302,7 +327,7 @@ def stage4_prefailure_patterns(log_df: pd.DataFrame) -> list:
 
             lead_hours = (
                 (inc_start - first_exceed).total_seconds() / 3600
-                if first_exceed is not None else inc["buildup_days"] * 24
+                if first_exceed is not None else buildup_hours
             )
 
             if col not in patterns:
@@ -311,14 +336,13 @@ def stage4_prefailure_patterns(log_df: pd.DataFrame) -> list:
             patterns[col]["increases"].append(increase_pct)
             patterns[col]["count"] += 1
 
-    # Yeterince gözlenen örüntüleri listele
     result = []
     for col, data in patterns.items():
         if data["count"] < 2:
             continue
         avg_lead     = float(np.mean(data["lead_times"]))
         avg_increase = float(np.mean(data["increases"]))
-        confidence   = min(data["count"] / len(INCIDENTS), 1.0)
+        confidence   = min(data["count"] / n_incidents, 1.0)
 
         result.append({
             "log_type":          col,
@@ -495,13 +519,11 @@ def plot_log_pipeline_results(insights: dict) -> None:
     if "log_risk_score" in agg_df.columns:
         risk_smooth = agg_df["log_risk_score"].rolling(24, min_periods=1).mean()
         ax1.fill_between(ts, risk_smooth, alpha=0.6, color="crimson", label="Log Risk Skoru (24s ort.)")
+        high_risk = risk_smooth > 0.5
+        ax1.fill_between(ts, risk_smooth, where=high_risk, alpha=0.3, color="orange", label="Yüksek risk (>0.5)")
         ax1.set_ylabel("Risk Skoru [0-1]")
         ax1.set_ylim(0, 1)
-    for inc in INCIDENTS:
-        buildup_s = pd.Timestamp(inc["start"]) - pd.Timedelta(days=inc["buildup_days"])
-        ax1.axvspan(buildup_s, pd.Timestamp(inc["start"]), alpha=0.15, color="orange")
-        ax1.axvspan(pd.Timestamp(inc["start"]), pd.Timestamp(inc["end"]), alpha=0.12, color="red")
-    ax1.set_title("Bileşik Log Risk Skoru (turuncu=buildup, kırmızı=incident)")
+    ax1.set_title("Bileşik Log Risk Skoru")
     ax1.xaxis.set_major_formatter(mdates.DateFormatter("%b '%y"))
     ax1.xaxis.set_major_locator(mdates.MonthLocator(interval=2))
     ax1.tick_params(axis="x", rotation=20, labelsize=7)

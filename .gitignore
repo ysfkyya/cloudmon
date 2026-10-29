@@ -7,7 +7,7 @@ __pycache__/
 venv/
 .venv/
 
-# Environment and secrets — API anahtarlarını commit'leme!
+# Environment ve secrets — API anahtarlarını commit'leme!
 .env
 *.env
 
@@ -16,6 +16,7 @@ data/processed/models/
 
 # Türetilmiş özellik matrisi (pipeline çıktısı)
 data/processed/features.csv
+data/processed/metrics_loaded.csv
 
 # Pipeline çıktıları (grafikler, raporlar)
 results/
@@ -27,6 +28,3 @@ catboost_info/
 .idea/
 .DS_Store
 Thumbs.db
-
-# NOT: data/synthetic/ Git'e dahildir.
-# Gerçek veri alındığında bu klasör silinip yerini data/raw/ alacak.

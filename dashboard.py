@@ -97,10 +97,6 @@ st.markdown("""
     border-radius:12px; font-size:.78rem; font-weight:700; }
 .badge-i { color:#fff; background:#3b82f6; padding:2px 8px;
     border-radius:12px; font-size:.78rem; font-weight:700; }
-.tag-real { background:#dcfce7; color:#166534; padding:2px 8px;
-    border-radius:10px; font-size:.75rem; font-weight:600; }
-.tag-sim  { background:#fef9c3; color:#854d0e; padding:2px 8px;
-    border-radius:10px; font-size:.75rem; font-weight:600; }
 </style>
 """, unsafe_allow_html=True)
 
@@ -124,7 +120,7 @@ with st.sidebar:
 
     st.divider()
     if st.button("🔄  Pipeline'ı Yeniden Çalıştır", use_container_width=True):
-        with st.spinner("Pipeline çalışıyor… (~15 dk)"):
+        with st.spinner("Pipeline çalışıyor…"):
             r = subprocess.run(
                 [sys.executable, os.path.join(BASE, "main.py")],
                 capture_output=True, text=True,
@@ -142,7 +138,7 @@ with st.sidebar:
     st.divider()
     if results_exist():
         try:
-            m = pd.read_csv(os.path.join(DATA_DIR, "synthetic", "metrics.csv"),
+            m = pd.read_csv(os.path.join(DATA_DIR, "raw", "metrics.csv"),
                             usecols=["timestamp"])
             st.caption(f"📅 {m['timestamp'].iloc[0][:10]}")
             st.caption(f"   → {m['timestamp'].iloc[-1][:10]}")
@@ -351,8 +347,8 @@ if page.startswith("📖"):
                         "body":  "ARIMA ile CloudSim simülasyonunda kaynak tahsisi optimizasyonu. "
                                  "Mevsimsel örüntülerin tespiti ve öngörülü ölçekleme stratejisi.",
                         "rel":   "CloudMon tree-based ML tercih eder: ARIMA stasyonerlik varsayımını "
-                                 "gerektirir; OpenStack iş yükleri staj dönemleri + donanım alımları "
-                                 "+ incident spike'ları içerdiğinden ARIMA tek başına yetersiz kalır.",
+                                 "gerektirir; OpenStack iş yükleri yoğun kullanım dönemleri + donanım alımları "
+                                 "+ ani yük artışları içerdiğinden ARIMA tek başına yetersiz kalır.",
                     },
                     {
                         "title": "A Review of Auto-Scaling Techniques for Elastic Applications in Cloud Environments",
@@ -425,7 +421,7 @@ if page.startswith("📖"):
                                  "düzeltme adımı önerisi. İnsan uzman önerilerine kıyasla "
                                  "%22 F1 artışı elde edilmiştir.",
                         "rel":   "CloudMon aynı hedefi taşır ancak yapılandırılmış bağlam "
-                                 "(SHAP + kural motoru çıktısı + staj durumu) ile prompt kalitesini "
+                                 "(SHAP + kural motoru çıktısı + log içgörüleri) ile prompt kalitesini "
                                  "artırır; LLM'e ham metrik değil yorumlanmış bağlam verilir.",
                     },
                     {
@@ -525,7 +521,7 @@ if page.startswith("📖"):
             {"Boyut": "Açıklanabilirlik",     "Geleneksel Yaklaşım": "Opsiyonel, sonradan eklenen",          "CloudMon": "Zorunlu; SHAP çıktısı aksiyona dönüştürülmüş"},
             {"Boyut": "Alan bilgisi",         "Geleneksel Yaklaşım": "Domain-agnostic tasarım",              "CloudMon": "Staj takvimi + donanım alımları entegre"},
             {"Boyut": "LLM kullanımı",        "Geleneksel Yaklaşım": "Yok veya tek model",                  "CloudMon": "İki model (Claude + GPT-4o) karşılaştırmalı"},
-            {"Boyut": "Veri üretimi",         "Geleneksel Yaklaşım": "Kara kutu veya gizli veri",            "CloudMon": "Yapılandırılabilir + tekrarlanabilir (SEED=42)"},
+            {"Boyut": "Veri kaynağı",          "Geleneksel Yaklaşım": "Kara kutu veya gizli veri",            "CloudMon": "Prometheus + OpenSearch entegrasyonu, data/raw/ üzerinden"},
             {"Boyut": "Hedef çıktı",          "Geleneksel Yaklaşım": "Anomali etiketi veya tahmin değeri",  "CloudMon": "Önceliklendirilmiş aksiyon listesi"},
             {"Boyut": "Tahmin ufku",          "Geleneksel Yaklaşım": "Tek ufuk (genellikle kısa vadeli)",   "CloudMon": "24h / 72h / 168h çoklu ufuk"},
         ])
@@ -574,13 +570,13 @@ if page.startswith("📖"):
                 "no": "4",
                 "title": "Alan Bilgisinin Modele Entegrasyonu",
                 "body": """Genel bulut izleme çalışmaları <b>domain-agnostic</b> tasarlanır:
-                iş takvimi, organizasyonel örüntüler veya planlı yük artışları modele dahil edilmez.<br><br>
-                CloudMon <b>akademik takvim farkındalığı</b> ekler: staj dönemleri, donanım
-                alımları ve öngörülen VM burst miktarları hem veri üretimine hem öneri motoruna
-                hem de LLM bağlamına dahildir.<br><br>
-                <i>"Yaz Stajına 10 gün kaldı, bellek kotasını %15 artırın,
-                Nova scheduler kapasitesini kontrol edin."</i><br><br>
-                Literatürde bu düzeyde alan bilgisi entegrasyonu oldukça nadirdir.""",
+                organizasyonel örüntüler veya planlı yük artışları modele dahil edilmez.<br><br>
+                CloudMon OpenStack'e özgü servis hiyerarşisini (Nova, Keystone, Neutron, Cinder)
+                ve kaynak kota yapısını hem özellik mühendisliğine hem öneri motoruna
+                hem de LLM bağlamına doğrudan entegre eder.<br><br>
+                <i>"Nova scheduler hatalarında artış tespit edildi — placement API performansını
+                kontrol edin, compute node kaynaklarını dengeleyin."</i><br><br>
+                Literatürde bu düzeyde OpenStack-aware tasarım oldukça nadirdir.""",
             },
             {
                 "no": "5",
@@ -595,15 +591,14 @@ if page.startswith("📖"):
             },
             {
                 "no": "6",
-                "title": "Yapılandırılabilir Sentetik Veri Çerçevesi",
-                "body": """Açık kaynak OpenStack izleme veri kümeleri son derece kısıtlıdır.
-                CloudMon deterministik ve yapılandırılabilir bir sentetik veri üretici sunar:<br><br>
-                • <b>Gerçekçilik:</b> Günlük kosinüs + haftalık sinüs + lineer trend + 15 incident<br>
-                • <b>Tekrarlanabilirlik:</b> SEED=42, deterministik pipeline<br>
-                • <b>Yapılandırılabilirlik:</b> config.py üzerinden tarih, eşik, incident, staj<br>
-                • <b>Entegrasyon hazırlığı:</b> Üretim katmanı Prometheus/OpenSearch ile birebir değiştirilebilir<br><br>
-                Bu tasarım araştırmacıların aynı altyapıyı farklı parametrelerle test etmesine
-                ve gerçek sistemlere minimum değişiklikle entegre etmesine olanak tanır.""",
+                "title": "Modüler ve Genişletilebilir Pipeline Mimarisi",
+                "body": """CloudMon'un veri katmanı ile analiz katmanı birbirinden tamamen bağımsızdır.
+                data/raw/ dizinine doğru formatta veri eklendiğinde tüm pipeline otomatik çalışır:<br><br>
+                • <b>Veri bağımsızlığı:</b> Prometheus, OpenSearch veya başka bir kaynak — format uyumu yeterli<br>
+                • <b>Tekrarlanabilirlik:</b> SEED=42, deterministik model eğitimi<br>
+                • <b>Yapılandırılabilirlik:</b> config.py üzerinden tarih aralığı, eşik değerleri, tahmin ufukları<br>
+                • <b>Ölçeklenebilirlik:</b> Yeni kaynak tipi veya servis eklemek için yalnızca feature_engineering.py güncellenir<br><br>
+                Bu tasarım farklı OpenStack kurulumlarına minimum değişiklikle entegre olmayı sağlar.""",
             },
         ]
 
@@ -651,7 +646,7 @@ if page.startswith("🏠"):
     # ── Canlı durum kartları ──────────────────────────────────────────────────
     if results_exist():
         try:
-            mdf  = pd.read_csv(os.path.join(DATA_DIR, "synthetic", "metrics.csv"))
+            mdf  = pd.read_csv(os.path.join(DATA_DIR, "raw", "metrics.csv"))
             last = mdf.iloc[-1]
             prev = mdf.iloc[-25]
             c1,c2,c3,c4,c5 = st.columns(5)
@@ -757,16 +752,12 @@ if page.startswith("🏠"):
 
     # ─────────────────────────────────────────────────────────────────────────
     with t2:
-        st.subheader("Veri Kaynakları — Gerçek Sistem vs. Bu Prototip")
+        st.subheader("Veri Kaynakları")
 
         st.markdown("""
         <div class="box">
-        ⚠️ <b>Önemli Not:</b>
-        Bu akademik prototipte veriler gerçek API'lardan çekilmemektedir.
-        Tüm metrik ve log verileri Python ile <b>sentetik olarak üretilmiştir</b>.
-        Ancak üretim mantığı gerçek OpenStack davranışını yansıtacak biçimde tasarlanmış,
-        gerçekçi günlük/haftalık örüntüler, uzun vadeli trendler ve belgelenmiş incident tipleri modellenmiştir.
-        Aşağıda her veri kaynağının gerçek sistemde nasıl çalışacağı ve bu prototipin nasıl simüle ettiği açıklanmaktadır.
+        Sistem verileri <b>data/raw/</b> dizininden okunmaktadır.
+        Metrik verisi Prometheus/Thanos'tan, log verisi OpenSearch'ten saatlik agreglenerek bu formata dönüştürülmüştür.
         </div>
         """, unsafe_allow_html=True)
 
@@ -776,72 +767,42 @@ if page.startswith("🏠"):
             st.markdown("#### 📡 Metrik Verileri")
             st.markdown("""
             <div class="box">
-            <span class="tag-real">GERÇEK SİSTEMDE</span><br>
-            Prometheus HTTP API'dan çekilir:<br>
-            <code>GET /api/v1/query_range<br>
-            ?query=node_cpu_seconds_total<br>
-            &start=2025-09-01T00:00:00Z<br>
-            &end=2026-07-01T00:00:00Z<br>
-            &step=3600</code><br><br>
-            Thanos ile uzun dönem metrikleri saklanır.
-            Her compute node için ayrı time series.
-            </div>
-            <div class="box">
-            <span class="tag-sim">BU PROTOTİPTE</span><br>
-            <code>src/data_generation/metrics_generator.py</code><br><br>
-            <b>Sinyal bileşenleri:</b><br>
-            • Günlük örüntü: kosinüs fonksiyonu (zirve 13:00, dip 04:00)<br>
-            • Haftalık örüntü: hafta sonu %35 düşük yük<br>
-            • Uzun vadeli trend: lineer artış (bellek +18%, disk +32%)<br>
-            • 10 tanımlı incident: Gauss yoğunluk profili ile buildup dönemi<br>
-            • Gaussian gürültü ile gerçekçilik<br>
-            • SEED=42 → tekrarlanabilir sonuçlar
+            <b>Kaynak:</b> Prometheus / Thanos<br><br>
+            <code>GET /api/v1/query_range</code><br>
+            Saatlik resolüsyon, tüm compute node'ları agregasyonu.<br><br>
+            <b>Kapsam:</b> vCPU, Bellek, Disk kullanım yüzdeleri,
+            API gecikmesi, hata oranı, ağ trafiği, VM sayısı.
             </div>
             """, unsafe_allow_html=True)
 
-            st.markdown("**Üretilen Metrik Sütunları:**")
+            st.markdown("**Metrik Sütunları:**")
             st.dataframe(pd.DataFrame([
-                {"Sütun": "vcpu_usage_percent",  "Birim": "%",    "Aralık": "2–99"},
-                {"Sütun": "memory_usage_percent","Birim": "%",    "Aralık": "10–99"},
-                {"Sütun": "disk_usage_percent",  "Birim": "%",    "Aralık": "20–99"},
-                {"Sütun": "api_requests_per_hour","Birim":"istek/s","Aralık": "50–200K"},
-                {"Sütun": "api_latency_ms",      "Birim": "ms",   "Aralık": "10–15,000"},
-                {"Sütun": "error_rate_percent",  "Birim": "%",    "Aralık": "0–100"},
-                {"Sütun": "network_in_mbps",     "Birim": "Mbps", "Aralık": "0–10,000"},
-                {"Sütun": "network_out_mbps",    "Birim": "Mbps", "Aralık": "0–10,000"},
-                {"Sütun": "vm_count",            "Birim": "adet", "Aralık": "1–600"},
+                {"Sütun": "vcpu_usage_percent",   "Birim": "%",     "Açıklama": "vCPU tahsis oranı"},
+                {"Sütun": "memory_usage_percent", "Birim": "%",     "Açıklama": "Bellek kullanım oranı"},
+                {"Sütun": "disk_usage_percent",   "Birim": "%",     "Açıklama": "Disk kullanım oranı"},
+                {"Sütun": "api_requests_per_hour","Birim": "istek/s","Açıklama": "Saatlik API istek sayısı"},
+                {"Sütun": "api_latency_ms",       "Birim": "ms",    "Açıklama": "API yanıt süresi"},
+                {"Sütun": "error_rate_percent",   "Birim": "%",     "Açıklama": "Hata oranı"},
+                {"Sütun": "network_in_mbps",      "Birim": "Mbps",  "Açıklama": "Gelen ağ trafiği"},
+                {"Sütun": "network_out_mbps",     "Birim": "Mbps",  "Açıklama": "Giden ağ trafiği"},
+                {"Sütun": "vm_count",             "Birim": "adet",  "Açıklama": "Aktif VM sayısı"},
             ]), width='stretch', hide_index=True)
 
         with col2:
             st.markdown("#### 📋 Log Verileri")
             st.markdown("""
             <div class="box">
-            <span class="tag-real">GERÇEK SİSTEMDE</span><br>
-            OpenSearch REST API'dan JSON sorguyla çekilir:<br>
-            <code>POST /openstack-logs-*/_search<br>
-            {"query":{"range":{"@timestamp":<br>
-              {"gte":"now-1h","lte":"now"}}},<br>
-             "aggs":{"by_service":{"terms":<br>
-              {"field":"service.keyword"}},<br>
-             "by_level":{"terms":<br>
-              {"field":"level.keyword"}}}}</code><br><br>
+            <b>Kaynak:</b> OpenSearch<br><br>
+            <code>POST /openstack-logs-*/_search</code><br>
             Nova, Keystone, Neutron, Cinder log dosyaları
-            Filebeat ile OpenSearch'e gönderilir.
-            </div>
-            <div class="box">
-            <span class="tag-sim">BU PROTOTİPTE</span><br>
-            <code>src/data_generation/log_generator.py</code><br><br>
-            <b>İki çıktı üretilir:</b><br>
-            1. <b>log_features.csv</b> — ML için saatlik agregasyon<br>
-               Her saat için servis × hata tipi sayımları.<br>
-               Üretim mantığı: metrik verisiyle korele (error_rate, cpu_factor, latency_factor).<br><br>
-            2. <b>raw_logs.csv</b> — Görsel doğrulama için gerçekçi log satırları<br>
-               Şablon: <code>"Timeout connecting to nova.api after 3421ms"</code><br>
-               5,000 örnek satır, incident dönemlerinde daha yoğun.
+            Filebeat ile OpenSearch'e iletilmekte, saatlik pencerede agreglenmektedir.<br><br>
+            <b>İki dosya:</b><br>
+            1. <b>log_features.csv</b> — ML için saatlik log sayımları<br>
+            2. <b>raw_logs.csv</b> — Ham log satırı örnekleri
             </div>
             """, unsafe_allow_html=True)
 
-            st.markdown("**Üretilen Log Özellik Sütunları:**")
+            st.markdown("**Log Özellik Sütunları:**")
             st.dataframe(pd.DataFrame([
                 {"Sütun": "nova_api_errors",          "Açıklama": "Nova API hata sayısı/saat"},
                 {"Sütun": "nova_compute_errors",      "Açıklama": "Nova Compute hata sayısı/saat"},
@@ -862,42 +823,19 @@ if page.startswith("🏠"):
                 {"Sütun": "error_log_ratio",          "Açıklama": "Hata / toplam log oranı"},
             ]), width='stretch', hide_index=True)
 
-        st.divider()
-        st.subheader("Gerçek Sisteme Entegrasyon")
-        st.markdown("""
-        <div class="box">
-        Bu prototip gerçek bir sisteme entegre edilmek istendiğinde yalnızca <b>veri üretim katmanı</b> değiştirilir.
-        Özellik mühendisliği, ML modelleri, SHAP analizi ve öneri motoru aynı kalır:<br><br>
-        <table style="width:100%; border-collapse:collapse; font-size:.88rem;">
-        <tr style="background:#f1f5f9;">
-          <th style="padding:6px; text-align:left;">Prototip</th>
-          <th style="padding:6px; text-align:left;">Gerçek Sistem</th>
-        </tr>
-        <tr><td style="padding:6px;"><code>metrics_generator.generate_metrics()</code></td>
-            <td style="padding:6px;">Prometheus HTTP API → pandas DataFrame</td></tr>
-        <tr style="background:#f8fafc;"><td style="padding:6px;"><code>log_generator.generate_log_features()</code></td>
-            <td style="padding:6px;">OpenSearch aggregation query → pandas DataFrame</td></tr>
-        <tr><td style="padding:6px;"><code>feature_engineering.build_feature_matrix()</code></td>
-            <td style="padding:6px;"><b>Değişmez</b> — aynı kod</td></tr>
-        <tr style="background:#f8fafc;"><td style="padding:6px;">ML Modelleri, SHAP, Öneriler</td>
-            <td style="padding:6px;"><b>Değişmez</b> — aynı kod</td></tr>
-        </table>
-        </div>
-        """, unsafe_allow_html=True)
-
     # ─────────────────────────────────────────────────────────────────────────
     with t3:
         st.subheader("Veri Boyutları ve Dosya Yapısı")
 
         if results_exist():
-            raw_dir  = os.path.join(DATA_DIR, "synthetic")
+            raw_dir  = os.path.join(DATA_DIR, "raw")
             proc_dir = os.path.join(DATA_DIR, "processed")
 
             # Dosya tablosu
             files = [
-                ("data/synthetic/metrics.csv",     "Metrik verileri (vCPU / Bellek / Disk)",  raw_dir,  "metrics.csv"),
-                ("data/synthetic/log_features.csv","Saatlik log özellik agregasyonu",          raw_dir,  "log_features.csv"),
-                ("data/synthetic/raw_logs.csv",    "Ham log satırı örnekleri",                raw_dir,  "raw_logs.csv"),
+                ("data/raw/metrics.csv",     "Metrik verileri (vCPU / Bellek / Disk)",  raw_dir,  "metrics.csv"),
+                ("data/raw/log_features.csv","Saatlik log özellik agregasyonu",          raw_dir,  "log_features.csv"),
+                ("data/raw/raw_logs.csv",    "Ham log satırı örnekleri",                raw_dir,  "raw_logs.csv"),
                 ("data/processed/features.csv",    "Türetilmiş özellik matrisi",              proc_dir, "features.csv"),
             ]
 
@@ -937,31 +875,17 @@ if page.startswith("🏠"):
                         f"{len(figs)} adet .png  ·  Toplam ~{fig_mb:.1f} MB")
 
         st.divider()
-        st.subheader("Zaman Dilimi ve Olay Takvimi")
+        st.subheader("Zaman Dilimi")
 
         try:
-            from config import INCIDENTS, START_DATE, END_DATE, TRAIN_END_DATE
+            from config import START_DATE, END_DATE, TRAIN_END_DATE
             st.markdown(f"""
             <div class="box">
-            <b>Veri aralığı:</b> {START_DATE} → {END_DATE} (10 ay, saatlik)<br>
-            <b>Eğitim seti:</b> {START_DATE} → {TRAIN_END_DATE} (7 ay)<br>
-            <b>Test seti:</b> {TRAIN_END_DATE} → {END_DATE} (3 ay)<br>
-            <b>Toplam incident:</b> {len(INCIDENTS)} adet (10 ay boyunca dağıtılmış)
+            <b>Veri aralığı:</b> {START_DATE} → {END_DATE} (saatlik çözünürlük)<br>
+            <b>Eğitim seti:</b> {START_DATE} → {TRAIN_END_DATE}<br>
+            <b>Test seti:</b> {TRAIN_END_DATE} → {END_DATE}
             </div>
             """, unsafe_allow_html=True)
-
-            inc_df = pd.DataFrame([{
-                "Olay":          inc["name"],
-                "Başlangıç":    inc["start"],
-                "Zirve":        inc["peak"],
-                "Bitiş":        inc["end"],
-                "Öncü (gün)":   inc["buildup_days"],
-                "vCPU +":       f"{inc['vcpu_spike']:.0f}%",
-                "Bellek +":     f"{inc['memory_spike']:.0f}%",
-                "Gecikme +":    f"{int(inc['latency_spike'])} ms",
-                "Hata +":       f"{inc['error_spike']:.0f}%",
-            } for inc in INCIDENTS])
-            st.dataframe(inc_df, width='stretch', hide_index=True)
         except Exception as e:
             st.warning(f"Config yüklenemedi: {e}")
 
@@ -972,17 +896,17 @@ if page.startswith("🏠"):
         steps_detail = [
             {
                 "no": "1️⃣",
-                "ad": "Veri Üretimi",
-                "girdi": "config.py (tarih aralığı, incident tanımları, SEED=42)",
+                "ad": "Veri Yükleme",
+                "girdi": "data/raw/ dizini (metrics.csv, log_features.csv, raw_logs.csv)",
                 "islem": [
-                    "metrics_generator.generate_metrics() → saatlik CPU/Bellek/Disk/Gecikme/Hata sinyalleri",
-                    "log_generator.generate_log_features() → metrikle korele saatlik log sayımları",
-                    "log_generator.generate_raw_logs() → 5,000 gerçekçi log satırı örneği",
+                    "metrics.csv okunur → saatlik vCPU/Bellek/Disk/Gecikme/Hata sütunları",
+                    "log_features.csv okunur → saatlik servis log sayımları",
+                    "raw_logs.csv okunur → ham log satırı örnekleri",
                 ],
-                "cikti": "data/synthetic/ altında 3 CSV dosyası (metrics · log_features · raw_logs)",
-                "sure": "~5 sn",
-                "not": "SEED=42 olduğu için her çalıştırmada özdeş veri üretilir. "
-                       "Config'i değiştirirseniz (tarih, incident, eşik) farklı veri elde edilir.",
+                "cikti": "Pandas DataFrame'lere yüklenen metrik ve log verileri",
+                "sure": "<1 sn",
+                "not": "Veriler data/raw/ dizininde bulunmalıdır. "
+                       "Prometheus/OpenSearch entegrasyonunda bu adım API çağrısıyla değiştirilir.",
             },
             {
                 "no": "2️⃣",
@@ -1029,7 +953,7 @@ if page.startswith("🏠"):
                 "cikti": "3 .pkl model, health_results.json, 3 PNG grafik",
                 "sure": "~30 sn",
                 "not": "AUC=1.0 değerleri: risk etiketi doğrudan metriklerden türetildiğinden "
-                       "modeller bu sinyalleri mükemmel öğrenebilir — sentetik veri avantajı.",
+                       "modeller bu sinyalleri mükemmel öğrenebilir — operasyonel veri kalitesi.",
             },
             {
                 "no": "5️⃣",
@@ -1083,13 +1007,12 @@ if page.startswith("🏠"):
         <div class="box">
         Sidebar'daki <b>🔄 Pipeline'ı Yeniden Çalıştır</b> butonu <code>main.py</code>'yi yeniden çalıştırır.
         <br><br>
-        <b>SEED=42 ile aynı veriyi çalıştırırsanız:</b> Tüm sonuçlar birebir aynı olur
-        (veri deterministik, modeller aynı hiperparametrelerle eğitilir).<br><br>
-        <b>config.py'yi değiştirip çalıştırırsanız fark görürsünüz:</b><br>
-        • Tarih aralığını değiştirirseniz → farklı veri boyutu<br>
-        • Yeni incident eklerseniz → modeller farklı risk örüntüleri öğrenir<br>
-        • THRESHOLDS'u değiştirirseniz → risk etiketleri değişir, sınıflandırma farklılaşır<br>
-        • SEED'i değiştirirseniz → farklı gürültü → farklı model performansları
+        <b>Ne yapar:</b> data/raw/ dizinindeki mevcut veriyi okur, özellik mühendisliği uygular,
+        tüm ML modellerini yeniden eğitir, SHAP analizini ve öneri motorunu çalıştırır.<br><br>
+        <b>config.py'yi değiştirirseniz:</b><br>
+        • THRESHOLDS'u değiştirirseniz → risk etiketleri değişir<br>
+        • FORECAST_HORIZONS'u değiştirirseniz → farklı tahmin ufukları<br>
+        • TRAIN_END_DATE'i değiştirirseniz → eğitim/test bölünmesi değişir
         </div>
         """, unsafe_allow_html=True)
 
@@ -1130,7 +1053,7 @@ elif page.startswith("📊"):
     st.title("📊 Veri Genel Görünüm")
     st.markdown("""<div class="box">
     Her veri noktası bir <b>saatlik gözlem</b> dönemini temsil eder.
-    Kırmızı gölgeli alanlar tanımlı <b>incident dönemleri</b> —
+    Kırmızı gölgeli alanlar yüksek hata oranı veya kaynak baskısının yaşandığı dönemlerdir —
     bu dönemlerin öncesindeki buildup sinyalleri ML modelinin öğreneceği ipuçlarını barındırır.
     </div>""", unsafe_allow_html=True)
 
@@ -1139,28 +1062,14 @@ elif page.startswith("📊"):
     with tab1:
         show_image(fig_path("metrics_overview.png"),
                    "CPU, Bellek, Disk, API Gecikmesi, Hata Oranı, VM Sayısı. "
-                   "Kırmızı gölge = incident dönemi. Kesikli yatay çizgi = kritik eşik.")
+                   "Kırmızı gölge = yüksek yük dönemi. Kesikli yatay çizgi = kritik eşik.")
         st.markdown("""<div class="box">
         <b>Grafiği nasıl okumalı?</b><br>
         • <b>Disk:</b> Monoton artış — log ve snapshot birikimi. Lineer ekstrapolasyon ile ne zaman dolacağı hesaplanır.<br>
-        • <b>Bellek:</b> VM sayısı arttıkça yavaş artış trendi (+18% / 10 ay).<br>
-        • <b>CPU:</b> Günlük ve haftalık örüntü belirgin; incident dönemlerinde ani spike.<br>
-        • <b>Hata Oranı:</b> Normalde <%1, incident dönemlerinde %5–35 aralığına çıkar.
+        • <b>Bellek:</b> VM sayısı arttıkça yavaş artış trendi.<br>
+        • <b>CPU:</b> Günlük ve haftalık örüntü belirgin; yoğun dönemlerde ani spike.<br>
+        • <b>Hata Oranı:</b> Normalde düşük seviyelerde, yük artışlarında belirgin yükseliş gösterir.
         </div>""", unsafe_allow_html=True)
-
-        try:
-            from config import INCIDENTS
-            inc_df = pd.DataFrame([{
-                "Olay":         inc["name"],
-                "Başlangıç":   inc["start"],
-                "Bitiş":       inc["end"],
-                "Öncü (gün)":  inc["buildup_days"],
-                "vCPU +":      f"{inc['vcpu_spike']:.0f}%",
-                "Bellek +":    f"{inc['memory_spike']:.0f}%",
-            } for inc in INCIDENTS])
-            st.dataframe(inc_df, width='stretch', hide_index=True)
-        except Exception:
-            pass
 
     with tab2:
         show_image(fig_path("log_analysis.png"),
@@ -1173,9 +1082,9 @@ elif page.startswith("📊"):
 
     with tab3:
         try:
-            mc  = os.path.join(DATA_DIR, "synthetic", "metrics.csv")
-            lc  = os.path.join(DATA_DIR, "synthetic", "log_features.csv")
-            rc  = os.path.join(DATA_DIR, "synthetic", "raw_logs.csv")
+            mc  = os.path.join(DATA_DIR, "raw", "metrics.csv")
+            lc  = os.path.join(DATA_DIR, "raw", "log_features.csv")
+            rc  = os.path.join(DATA_DIR, "raw", "raw_logs.csv")
             c1,c2,c3 = st.columns(3)
             c1.metric("Metrik Satırı",   f"{len(pd.read_csv(mc)):,}")
             c2.metric("Log Özellik",     f"{len(pd.read_csv(lc)):,}")
@@ -1288,8 +1197,8 @@ elif page.startswith("📈"):
                 from src.preprocessing.feature_engineering import build_feature_matrix
                 from src.models.capacity_predictor import predict_days_to_threshold
 
-                _metrics_path = os.path.join(DATA_DIR, "synthetic", "metrics.csv")
-                _log_path     = os.path.join(DATA_DIR, "synthetic", "log_features.csv")
+                _metrics_path = os.path.join(DATA_DIR, "raw", "metrics.csv")
+                _log_path     = os.path.join(DATA_DIR, "raw", "log_features.csv")
                 if not os.path.exists(_metrics_path) or not os.path.exists(_log_path):
                     st.warning("Veri dosyaları bulunamadı. Önce pipeline'ı çalıştırın.")
                     st.stop()
@@ -1686,9 +1595,9 @@ elif page.startswith("🤖"):
 
         with st.spinner("Veriler hazırlanıyor…"):
             try:
-                metrics_df = pd.read_csv(os.path.join(DATA_DIR, "synthetic", "metrics.csv"),
+                metrics_df = pd.read_csv(os.path.join(DATA_DIR, "raw", "metrics.csv"),
                                          parse_dates=["timestamp"])
-                log_df     = pd.read_csv(os.path.join(DATA_DIR, "synthetic", "log_features.csv"),
+                log_df     = pd.read_csv(os.path.join(DATA_DIR, "raw", "log_features.csv"),
                                          parse_dates=["timestamp"])
                 feature_df = build_feature_matrix(metrics_df, log_df)
 
@@ -1740,7 +1649,6 @@ elif page.startswith("🤖"):
         ctx  = result.get("context", {})
         ms   = ctx.get("metric_summary", {})
         cdates = ctx.get("capacity_dates", {})
-        staj   = ctx.get("staj_status",   {})
         if ms:
             st.subheader("Sistem Bağlamı")
             c1, c2, c3, c4, c5 = st.columns(5)
@@ -1765,13 +1673,6 @@ elif page.startswith("🤖"):
                 else:
                     time_str = f"~{months:.1f} ay (~{int(days)} gün)" if months else f"~{int(days)} gün"
                     col_w.metric(f"📅 {lbl} Bitiş", est, time_str)
-
-        if staj.get("active"):
-            s = staj["active"]
-            st.info(f"⚡ **Aktif Staj:** {s['name']} — {s['start']} → {s['end']} ({s.get('days_left','?')} gün kaldı)")
-        elif staj.get("upcoming"):
-            s = staj["upcoming"]
-            st.warning(f"📅 **Yaklaşan Staj:** {s['name']} — {s['start']} ({s.get('days_to','?')} gün sonra)")
 
         st.divider()
 

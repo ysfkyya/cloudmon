@@ -1,11 +1,10 @@
 """
-Proaktif öneri motoru — kapasite, log anomalileri ve staj uyarıları.
+Proaktif öneri motoru — kapasite, log anomalileri ve metrik trend uyarıları.
 
 Öneri kategorileri:
   KAPASİTE : kaynak eşiğine tahmini ulaşma tarihi
   LOG      : log pipeline anomali ve örüntü bulgularına dayalı
   TREND    : haftalık log ve metrik bozulmaları
-  STAJ     : aktif veya yaklaşan staj dönemi
 """
 
 import os
@@ -17,7 +16,7 @@ import numpy as np
 import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
-from config import THRESHOLDS, RESULTS_DIR, STAJ_PERIODS
+from config import THRESHOLDS, RESULTS_DIR
 
 _CAPACITY_RULES = [
     {
@@ -30,7 +29,7 @@ _CAPACITY_RULES = [
             "Yeni compute node alımı için satın alma sürecini başlatın (temin süresi ~60 gün).",
             "vCPU overcommit oranını gözden geçirin; kullanılmayan instance'ları sonlandırın.",
             "Büyük flavour talepleri için Nova scheduler ağırlıklarını kısıtlayın.",
-            "Staj dönemlerine denk geliyorsa kullanıcı vCPU kotalarını daraltın.",
+            "Yoğun kullanım dönemlerinde kullanıcı vCPU kotalarını gözden geçirin.",
         ],
     },
     {
@@ -63,7 +62,7 @@ _LOG_SUGGESTIONS = {
     "timeout_count":               "Nova API ve Keystone timeout değerlerini artırın; bağlantı havuzu boyutunu büyütün.",
     "db_connection_count":         "MySQL/MariaDB max_connections parametresini artırın; bağlantı havuzu sağlığını izleyin.",
     "resource_exhausted_count":    "Nova scheduler ağırlıklarını ve filtrelerini güncelleyin; compute kaynaklarını dengeleyin.",
-    "quota_exceeded_count":        "Keystone proje kotalarını gözden geçirin; staj kullanıcıları kota aşımına yol açıyor olabilir.",
+    "quota_exceeded_count":        "Keystone proje kotalarını gözden geçirin; yoğun kullanım dönemlerinde kota aşımı yaşanıyor olabilir.",
     "auth_failure_count":          "Keystone token süresi ve revocation listesi yapılandırmasını gözden geçirin.",
     "network_error_count":         "Neutron OVS agent durumunu ve VLAN yapılandırmalarını kontrol edin.",
     "scheduler_error_count":       "Nova compute node'larının servis durumunu ve kaynak raporlamasını doğrulayın.",
@@ -72,7 +71,7 @@ _LOG_SUGGESTIONS = {
     "memory_pressure_count":       "Compute node'larında bellek kullanımını izleyin; OOM killer loglarını kontrol edin.",
     "connection_pool_warn_count":  "DB bağlantı havuzu kapasitesini artırın; oslo.db max_pool_size değerini ayarlayın.",
     "scheduler_degradation_count": "Nova scheduler yanıt sürelerini profilleyin; placement API performansını kontrol edin.",
-    "quota_pressure_count":        "Kota limitlerini yaklaşan staj dönemine göre önceden gözden geçirin.",
+    "quota_pressure_count":        "Kota limitlerini yoğun kullanım dönemlerine göre önceden gözden geçirin.",
     "disk_io_degradation_count":   "Cinder backend'in I/O latency değerlerini izleyin; storage array queue depth'ini kontrol edin.",
     "cascade_indicator_count":     "Birden fazla servis aynı anda bozuluyor — sistem genelinde bir köklü neden araştırın.",
 }
@@ -92,7 +91,6 @@ def generate_recommendations(
     recs += _capacity_recommendations(feature_df, capacity_results, shap_capacity, ts_now)
     recs += _log_anomaly_recommendations(log_insights or {}, ts_now)
     recs += _trend_recommendations(feature_df, ts_now)
-    recs += _staj_recommendations(ts_now)
 
     order = {"critical": 0, "warning": 1, "info": 2}
     recs  = sorted(recs, key=lambda x: order.get(x["severity"], 9))
@@ -286,63 +284,11 @@ def _trend_recommendations(feature_df, ts_now):
             ),
             "actions": [
                 f"{label} değişimini inceleyin; ilgili servislerin loglarını kontrol edin.",
-                "Değişim staj dönemine denk geliyorsa kullanıcı kota ayarlarını gözden geçirin.",
+                "Değişim yoğun kullanım dönemine denk geliyorsa kullanıcı kota ayarlarını gözden geçirin.",
                 "Değişim keskin ise yakın zamanda yapılan yapılandırma değişikliklerini araştırın.",
             ],
             "timestamp": ts_now,
         })
-
-    return recs
-
-
-# ── Staj uyarıları ────────────────────────────────────────────────────────────
-
-def _staj_recommendations(ts_now: str) -> list:
-    recs       = []
-    current_ts = pd.Timestamp(ts_now)
-
-    for staj in STAJ_PERIODS:
-        start = pd.Timestamp(staj["start"])
-        end   = pd.Timestamp(staj["end"])
-
-        if start <= current_ts <= end:
-            days_left = max((end - current_ts).days, 0)
-            recs.append({
-                "severity":  "warning",
-                "category":  "STAJ",
-                "title":     f"{staj['name']} Aktif — {days_left} Gün Kaldı",
-                "detail":    (
-                    f"Aktif staj dönemi: {staj['start']} → {staj['end']}. "
-                    f"Beklenen ek yük: +{staj['vcpu_extra']} vCPU, "
-                    f"Bellek +{staj['mem_extra']:.0f}%, Hata +{staj['error_extra']:.1f}%."
-                ),
-                "actions": [
-                    "Nova scheduler ağırlıklarını ve host aggregate'leri kontrol edin.",
-                    f"Keystone proje kotalarını doğrulayın — +{staj['vcpu_extra']} ek vCPU için yeterli mi?",
-                    "Quota exceeded ve resource_exhausted hatalarındaki artışları izleyin.",
-                    "Staj bitiminde VM'lerin temizlenmesi için kullanıcılara bildirim gönderin.",
-                ],
-                "timestamp": ts_now,
-            })
-
-        elif start > current_ts and (start - current_ts).days <= 45:
-            days_to = (start - current_ts).days
-            recs.append({
-                "severity":  "info",
-                "category":  "STAJ",
-                "title":     f"{staj['name']} {days_to} Gün Sonra Başlıyor",
-                "detail":    (
-                    f"{staj['name']} başladığında ~+{staj['vcpu_extra']} vCPU, "
-                    f"Bellek +{staj['mem_extra']:.0f}% artış beklenir. "
-                    f"Hazırlık için {days_to} gününüz var."
-                ),
-                "actions": [
-                    "Mevcut vCPU kapasitesinin staj yükünü kaldırıp kaldıramayacağını hesaplayın.",
-                    "Staj kullanıcı hesaplarını ve kotalarını staj başlamadan önce yapılandırın.",
-                    "Gerekirse yeni donanım alımı için satın alma sürecini başlatın.",
-                ],
-                "timestamp": ts_now,
-            })
 
     return recs
 

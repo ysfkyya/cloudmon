@@ -2,15 +2,12 @@
 main.py — Bulut Altyapısı Proaktif İzleme ve Karar Destek Sistemi
 
 Pipeline adımları:
-  1. Veri üretimi      : 18 aylık sentetik metrik (vCPU 30→1598) + zengin log verisi
-  2. Log işleme hattı  : 4 aşamalı log analizi (ayrıştırma → agregasyon → anomali → örüntü)
-  3. Özellik müh.      : rolling, lag, delta, zaman ve log özellikleri
-  4. Kapasite tahmini  : 7 model × 3 kaynak × 3 ufuk (24h/72h/168h) = 63 regresyon modeli
-  5. SHAP analizi      : Açıklanabilirlik ve özellik önem sıralaması
-  6. LLM Önerileri     : Metrik + log analizi çıkarımları LLM'e beslenerek proaktif öneriler
-
-vCPU senaryosu: Toplam 2000 vCPU | Ocak 2025: 30 → Temmuz 2026: 1598
-                Mevcut trend: ~8 ay sonra tam dolum (Mart 2027)
+  1. Veri yükleme        : data/raw/ dizininden CSV okuma
+  2. Log işleme hattı    : 4 aşamalı log analizi (ayrıştırma → agregasyon → anomali → örüntü)
+  3. Özellik müh.        : rolling, lag, delta, zaman ve log özellikleri
+  4. Kapasite tahmini    : 7 model × 3 kaynak × 2 ufuk (24h/72h) = 42 regresyon modeli
+  5. SHAP analizi        : Açıklanabilirlik ve özellik önem sıralaması
+  6. LLM Önerileri       : Metrik + log analizi çıkarımları LLM'e beslenerek proaktif öneriler
 """
 
 import os
@@ -18,7 +15,6 @@ import sys
 import time
 import json
 import warnings
-import numpy as np
 import pandas as pd
 
 warnings.filterwarnings("ignore")
@@ -26,10 +22,9 @@ warnings.filterwarnings("ignore")
 BASE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE)
 
-from config import DATA_DIR, SYNTHETIC_DIR, RESULTS_DIR
+from config import DATA_DIR, RAW_DIR, RESULTS_DIR
 
 for d in [
-    SYNTHETIC_DIR,
     os.path.join(DATA_DIR, "processed", "models"),
     os.path.join(RESULTS_DIR, "figures"),
     os.path.join(RESULTS_DIR, "reports"),
@@ -37,9 +32,7 @@ for d in [
     os.makedirs(d, exist_ok=True)
 
 
-from src.data_generation.metrics_generator import generate_metrics, plot_metrics_overview
-from src.data_generation.log_generator     import generate_log_features, generate_raw_logs, plot_log_analysis
-from src.data_generation.log_processor     import run_log_pipeline, plot_log_pipeline_results
+from src.log_analysis.log_processor        import run_log_pipeline, plot_log_pipeline_results
 from src.preprocessing.feature_engineering import build_feature_matrix, prepare_capacity_dataset
 from src.models.capacity_predictor         import train_capacity_models
 from src.explainability.shap_explainer     import explain_capacity
@@ -62,48 +55,31 @@ def main() -> None:
 
     print("\n" + "=" * 62)
     print("  BULUT ALTYAPI PROAKTİF İZLEME & KARAR DESTEK SİSTEMİ")
-    print("  OpenStack | vCPU: 30 → 1598/2000 | Log Pipeline + LLM")
+    print("  OpenStack | ML Pipeline | Log Analizi | LLM")
     print("=" * 62)
 
-    # ── Adım 1: Veri Üretimi ────────────────────────────────────────────────
-    _step("ADIM 1 / 6  →  Sentetik Veri Üretimi")
+    # ── Adım 1: Veri Yükleme ────────────────────────────────────────────────
+    _step("ADIM 1 / 6  →  Veri Yükleme")
     t0 = time.time()
 
-    metrics_df = generate_metrics()
-    log_df     = generate_log_features(metrics_df)
-    raw_logs   = generate_raw_logs(metrics_df, n_samples=8000)
+    metrics_path  = os.path.join(RAW_DIR, "metrics.csv")
+    log_path      = os.path.join(RAW_DIR, "log_features.csv")
+    raw_logs_path = os.path.join(RAW_DIR, "raw_logs.csv")
 
-    metrics_df.to_csv(os.path.join(SYNTHETIC_DIR, "metrics.csv"),      index=False)
-    log_df.to_csv(    os.path.join(SYNTHETIC_DIR, "log_features.csv"), index=False)
-    raw_logs.to_csv(  os.path.join(SYNTHETIC_DIR, "raw_logs.csv"),     index=False)
+    for p in [metrics_path, log_path, raw_logs_path]:
+        if not os.path.exists(p):
+            raise FileNotFoundError(f"Veri dosyası bulunamadı: {p}")
 
-    vcpu_start = int(metrics_df["vcpu_used"].iloc[0])
-    vcpu_end   = int(metrics_df["vcpu_used"].iloc[-1])
+    metrics_df = pd.read_csv(metrics_path,  parse_dates=["timestamp"])
+    log_df     = pd.read_csv(log_path,      parse_dates=["timestamp"])
+    raw_logs   = pd.read_csv(raw_logs_path)
 
-    mem_start_gb = int(metrics_df["memory_used_gb"].iloc[0])
-    mem_end_gb   = int(metrics_df["memory_used_gb"].iloc[-1])
-    mem_total_gb = int(metrics_df["memory_total_gb"].iloc[0])
-    disk_start   = round(float(metrics_df["disk_used_tb"].iloc[0]), 0)
-    disk_end     = round(float(metrics_df["disk_used_tb"].iloc[-1]), 0)
-    disk_total   = int(metrics_df["disk_total_tb"].iloc[0])
+    metrics_df.to_csv(os.path.join(DATA_DIR, "processed", "metrics_loaded.csv"), index=False)
 
     print(f"  Metrik veri seti    : {len(metrics_df):,} satır  "
           f"({metrics_df['timestamp'].min().date()} → {metrics_df['timestamp'].max().date()})")
-    print(f"  vCPU kullanımı      : {vcpu_start} → {vcpu_end} / "
-          f"{int(metrics_df['vcpu_total'].iloc[0])} "
-          f"(%{metrics_df['vcpu_usage_percent'].iloc[-1]:.1f})")
-    print(f"  Bellek kullanımı    : {mem_start_gb} → {mem_end_gb} / {mem_total_gb} GB "
-          f"(%{metrics_df['memory_usage_percent'].iloc[-1]:.1f})")
-    print(f"  Disk kullanımı      : {disk_start:.0f} → {disk_end:.0f} / {disk_total} TB "
-          f"(%{metrics_df['disk_usage_percent'].iloc[-1]:.1f})")
     print(f"  Log özellik seti    : {len(log_df):,} satır")
-    print(f"  Ham log kayıtları   : {len(raw_logs):,} satır  "
-          f"(WARNING: {(raw_logs['level']=='WARNING').sum():,}  "
-          f"ERROR: {(raw_logs['level']=='ERROR').sum():,}  "
-          f"CRITICAL: {(raw_logs['level']=='CRITICAL').sum():,})")
-
-    plot_metrics_overview(metrics_df)
-    plot_log_analysis(log_df)
+    print(f"  Ham log kayıtları   : {len(raw_logs):,} satır")
     print(f"  [{_elapsed(t0)}]")
 
     # ── Adım 2: Log İşleme Hattı ────────────────────────────────────────────
@@ -166,7 +142,6 @@ def main() -> None:
         log_insights=log_insights,
     )
 
-    # LLM çağrısı (API anahtarı varsa)
     advisor = LLMAdvisor()
     if advisor.available_providers():
         print(f"\n  LLM Sağlayıcıları: {', '.join(advisor.available_providers())}")
@@ -233,7 +208,7 @@ def _print_summary(cap_res, recs, log_insights, t_total):
         "disk_usage_percent":   "Disk  ",
     }
 
-    n_models = len(cap_res) * 7  # 9 hedef × 7 model
+    n_models = len(cap_res) * 7
     print(f"\n  Kapasite Tahmin Sonuçları (En İyi Model — RMSE Bazlı)  [{n_models} model eğitildi]:")
     for h in FORECAST_HORIZONS:
         print(f"\n    Ufuk: {h} saat")

@@ -83,17 +83,16 @@ pip install -r requirements.txt -q
 info "Tüm bağımlılıklar yüklendi."
 
 # ── Dizin yapısı ──────────────────────────────────────────────────────────────
-for d in data/synthetic data/processed/models results/figures results/reports; do
+for d in data/raw data/processed/models results/figures results/reports; do
     mkdir -p "$d"
 done
-
-# ── ML Pipeline ───────────────────────────────────────────────────────────────
-step "ML Pipeline başlatılıyor (~15-20 dk)"
-python3 main.py
 
 echo ""
 echo "╔══════════════════════════════════════════════════════╗"
 echo "║  Kurulum tamamlandı!                                 ║"
+echo "║                                                      ║"
+echo "║  ML pipeline çalıştırmak için:                       ║"
+echo "║    source venv/bin/activate && python3 main.py       ║"
 echo "║                                                      ║"
 echo "║  Dashboard başlatmak için:                           ║"
 echo "║    bash start.sh                                     ║"

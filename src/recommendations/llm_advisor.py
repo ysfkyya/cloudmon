@@ -40,7 +40,6 @@ def build_prompt(context: dict) -> str:
     context anahtarları:
       metric_summary      : son 24s ort/maks metrikler
       capacity_dates      : her kaynak için eşik tarihi + günler
-      staj_status         : aktif/yaklaşan staj dönemleri
       error_summary       : 7 günlük log karşılaştırması
       shap_features       : top SHAP özelliği listesi
       log_anomalies_24h   : son 24s anomali tespitleri
@@ -53,7 +52,6 @@ def build_prompt(context: dict) -> str:
     """
     ms      = context.get("metric_summary", {})
     cdates  = context.get("capacity_dates", {})
-    staj    = context.get("staj_status", {})
     err     = context.get("error_summary", {})
     shap    = context.get("shap_features", [])
     recs    = context.get("recommendations", [])
@@ -91,25 +89,6 @@ def build_prompt(context: dict) -> str:
         else:
             cap_lines.append(f"  {lbl}: %{cur:.1f} → Eşik %{thr} (yetersiz veri)")
     cap_block = "\n".join(cap_lines) or "  (Kapasite verisi yok)"
-
-    # ── Staj durumu ───────────────────────────────────────────────────────────
-    if staj.get("active"):
-        s = staj["active"]
-        staj_block = (
-            f"  AKTİF STAJ: {s['name']} ({s['start']} – {s['end']}, "
-            f"{s.get('days_left', '?')} gün kaldı)\n"
-            f"  Beklenen etki: +{s.get('vcpu_extra', '?')} vCPU, "
-            f"Bellek +{s.get('mem_extra', '?')}%, Hata +{s.get('error_extra', '?')}%"
-        )
-    elif staj.get("upcoming"):
-        s = staj["upcoming"]
-        staj_block = (
-            f"  YAKLAŞAN STAJ: {s['name']} ({s.get('days_to', '?')} gün sonra)\n"
-            f"  Planlanan etki: +{s.get('vcpu_extra', '?')} vCPU, "
-            f"Bellek +{s.get('mem_extra', '?')}%"
-        )
-    else:
-        staj_block = "  Aktif veya yaklaşan staj dönemi yok."
 
     # ── Log anomali satırları (son 24 saat) ───────────────────────────────────
     anom_lines = []
@@ -199,9 +178,6 @@ Hata Oranı           : Ort %{ms.get('error_mean', 0):.2f}  |  Maks %{ms.get('er
 ━━━ KAPASİTE DOLUM TAHMİNİ (ML modeli, 30g medyan trend) ━━━
 {cap_block}
 
-━━━ STAJ DÖNEMİ DURUMU ━━━
-{staj_block}
-
 ━━━ LOG ANALİZİ — SON 24 SAAT ANOMALİLERİ ━━━
 (z-skor tabanlı anormal yoğunlaşmalar — [ERKEN UYARI]=problem öncesi sinyal)
 {anom_block}
@@ -245,8 +221,8 @@ Yukarıdaki metrik VE log analizi verilerini birlikte değerlendirerek:
 4. SERVİS ÖNCELİKLERİ: Bozuk/Kritik servisler için uygulanabilir OpenStack komutu
    veya yapılandırma adımı ver (nova, keystone, neutron, cinder komutları).
 
-5. STAJ HAZIRLIĞI: Aktif/yaklaşan staj dönemini göz önünde bulundurarak kota ve
-   kaynak planlaması için spesifik öneriler sun.
+5. KAYNAK PLANLAMA: Mevcut trendlere göre kota ve kaynak planlaması için
+   spesifik öneriler sun.
 
 Yanıtını TÜRKÇE ver. Teknik jargondan kaçın ama OpenStack servis adlarını kullan.
 Madde madde, kısa ve net ol. Toplam yanıt 700 kelimeyi geçmesin."""
@@ -263,7 +239,7 @@ def extract_context(
     feature_df, model çıktıları, log pipeline sonuçları ve öneri listesinden
     zengin prompt bağlamı hazırlar.
     """
-    from config import THRESHOLDS, STAJ_PERIODS
+    from config import THRESHOLDS
     from src.models.capacity_predictor import predict_days_to_threshold
     from src.recommendations.engine import build_error_summary
 
@@ -311,18 +287,6 @@ def extract_context(
     # Haftalık hata özeti
     error_summary = build_error_summary(feature_df)
 
-    # Staj durumu
-    current_ts = feature_df.index[-1]
-    staj_status: dict = {}
-    for staj in STAJ_PERIODS:
-        s_start = pd.Timestamp(staj["start"])
-        s_end   = pd.Timestamp(staj["end"])
-        if s_start <= current_ts <= s_end:
-            staj_status["active"] = {**staj, "days_left": max((s_end - current_ts).days, 0)}
-            break
-        elif s_start > current_ts and (s_start - current_ts).days <= 45:
-            staj_status["upcoming"] = {**staj, "days_to": (s_start - current_ts).days}
-
     # Log pipeline içgörüleri
     li = log_insights or {}
     log_anomalies_24h   = li.get("anomalies_last_24h", [])
@@ -336,9 +300,8 @@ def extract_context(
         "shap_features":       shap_features,
         "error_summary":       error_summary,
         "capacity_dates":      capacity_dates,
-        "staj_status":         staj_status,
         "recommendations":     recommendations or [],
-        "current_date":        str(current_ts)[:10],
+        "current_date":        str(feature_df.index[-1])[:10],
         "log_anomalies_24h":   log_anomalies_24h,
         "log_trends_7d":       log_trends_7d,
         "prefailure_patterns": prefailure_patterns,
