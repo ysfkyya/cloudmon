@@ -18,8 +18,8 @@ data/processed/models/
 data/processed/features.csv
 data/processed/metrics_loaded.csv
 
-# Pipeline çıktıları (grafikler, raporlar)
-results/
+# Pipeline çıktıları — raporlar ve grafikler izleniyor
+# Sadece büyük binary model dosyaları ignore
 
 # Geçici / IDE / OS
 catboost_info/

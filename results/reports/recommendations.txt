@@ -1,0 +1,92 @@
+======================================================================
+  BULUT ALT YAPI PROAKTİF İZLEME — OPERASYONEL RAPOR
+  Oluşturulma: 2026-10-29 11:33
+======================================================================
+
+── KAPASİTE DURUMU ──────────────────────────────────────────────
+  vCPU  : %79.6 → Eşik %90.0 | +0.275%/gün | Tahmini eşik: 2026-09-12 (~2.4 ay / ~74 gün)
+  Bellek: %85.5 → Eşik %88.0 | +0.151%/gün | Tahmini eşik: 2026-08-15 (~1.5 ay / ~46 gün)
+  Disk  : %80.0 → Eşik %85.0 | +0.000%/gün | Kararlı trend (>180 gün)
+
+── 7 GÜNLÜK LOG ÖZETİ ──────────────────────────────────────────
+  Timeout                     :    105 kez  (-96% değişim)
+  DB Bağlantı                 :     19 kez  (-98% değişim)
+  Kaynak Tükenmesi            :    157 kez  (-96% değişim)
+  Kota Aşımı                  :      7 kez  (-99% değişim)
+  Kimlik Doğrulama            :     45 kez  (-92% değişim)
+  Ağ Hatası                   :     16 kez  (-98% değişim)
+  Zamanlayıcı                 :     29 kez  (-98% değişim)
+  Yavaş Yanıt                 :  1,285 kez  (-58% değişim) !!!
+  Bellek Baskısı              :  3,096 kez  (-23% değişim) !!!
+  Bağlantı Havuzu             :  2,046 kez  (-44% değişim) !!!
+  Zamanlayıcı Bozulma         :  2,575 kez  (-23% değişim) !!!
+  Cascade Göstergesi          :  1,078 kez  (-36% değişim) !!!
+  CRITICAL Log                :      3 kez  (-95% değişim)
+
+── ÖNERİLER ──────────────────────────────────────────────────────
+
+[1] [KRİTİK] LOG ANOMALİSİ — Kota Aşımı — Anormal Artış (z=4.5, 0.8x normal)
+     Son 24 saatte 'Kota Aşımı' log sayısı normalin 0.8 katına çıktı (z-skor: 4.5). Bu erken uyarı sinyali yaklaşan bir soruna işaret edebilir.
+     Aksiyonlar:
+       1. Keystone proje kotalarını gözden geçirin; staj kullanıcıları kota aşımına yol açıyor olabilir.
+       2. Son 6 saatin servis loglarını ayrıntılı inceleyin.
+       3. İlgili kapasite metriklerini (vCPU, bellek) beraber değerlendirin.
+
+[2] [KRİTİK] CASCADE RİSKİ — Çok Servisli Bozulma Tespit Edildi (2026-06-28 08:00:00)
+     Birden fazla OpenStack servisi aynı anda anomali gösterdi (1.0 saat boyunca). Bu örüntü sistemik bir sorunun habercisi olabilir.
+     Aksiyonlar:
+       1. Nova, Neutron ve Keystone servis durumlarını eş zamanlı kontrol edin.
+       2. OpenStack health-check komutunu çalıştırın: openstack service list.
+       3. RabbitMQ kuyruk derinliğini ve DB bağlantı sayısını inceleyin.
+       4. Tüm compute ve network node'larında agent durumunu doğrulayın.
+
+[3] [UYARI] KAPASİTE — vCPU Tahsis Oranı — Tahmini Eşik Tarihi: 2026-09-12
+     Mevcut vCPU Tahsis Oranı: 79.6% (eşik: 90.0%). 30 günlük medyan artış: +0.275%/gün. Tahmini eşik tarihi: 2026-09-12 (~2.4 ay / ~74 gün). En etkili SHAP özelliği: 'vm_count_rmean_24h'.
+     Aksiyonlar:
+       1. Yeni compute node alımı için satın alma sürecini başlatın (temin süresi ~60 gün).
+       2. vCPU overcommit oranını gözden geçirin; kullanılmayan instance'ları sonlandırın.
+       3. Büyük flavour talepleri için Nova scheduler ağırlıklarını kısıtlayın.
+       4. Staj dönemlerine denk geliyorsa kullanıcı vCPU kotalarını daraltın.
+
+[4] [UYARI] KAPASİTE — Bellek Kullanımı — Tahmini Eşik Tarihi: 2026-08-15
+     Mevcut Bellek Kullanımı: 85.5% (eşik: 88.0%). 30 günlük medyan artış: +0.151%/gün. Tahmini eşik tarihi: 2026-08-15 (~1.5 ay / ~46 gün). En etkili SHAP özelliği: 'vm_count_rmean_24h'.
+     Aksiyonlar:
+       1. Bellek sızıntısı şüpheli VM'leri ve servisleri inceleyin.
+       2. Nova memory_mb_used değerini Keystone proje kotalarıyla karşılaştırın.
+       3. Büyük bellek tahsisi yapan VM'leri daha az yoğun node'lara taşıyın.
+
+[5] [UYARI] LOG ANOMALİSİ — Disk I/O Hatası — Anormal Artış (z=3.6, 0.4x normal)
+     Son 24 saatte 'Disk I/O Hatası' log sayısı normalin 0.4 katına çıktı (z-skor: 3.6). Bu erken uyarı sinyali yaklaşan bir soruna işaret edebilir.
+     Aksiyonlar:
+       1. Cinder backend sağlığını ve iSCSI bağlantılarını denetleyin.
+       2. Son 6 saatin servis loglarını ayrıntılı inceleyin.
+       3. İlgili kapasite metriklerini (vCPU, bellek) beraber değerlendirin.
+
+[6] [UYARI] LOG ANOMALİSİ — Ağ Hatası — Anormal Artış (z=2.8, 0.4x normal)
+     Son 24 saatte 'Ağ Hatası' log sayısı normalin 0.4 katına çıktı (z-skor: 2.8). Bu erken uyarı sinyali yaklaşan bir soruna işaret edebilir.
+     Aksiyonlar:
+       1. Neutron OVS agent durumunu ve VLAN yapılandırmalarını kontrol edin.
+       2. Son 6 saatin servis loglarını ayrıntılı inceleyin.
+       3. İlgili kapasite metriklerini (vCPU, bellek) beraber değerlendirin.
+
+[7] [UYARI] LOG ANOMALİSİ — DB Bağlantı Hatası — Anormal Artış (z=2.6, 1.2x normal)
+     Son 24 saatte 'DB Bağlantı Hatası' log sayısı normalin 1.2 katına çıktı (z-skor: 2.6). Bu erken uyarı sinyali yaklaşan bir soruna işaret edebilir.
+     Aksiyonlar:
+       1. MySQL/MariaDB max_connections parametresini artırın; bağlantı havuzu sağlığını izleyin.
+       2. Son 6 saatin servis loglarını ayrıntılı inceleyin.
+       3. İlgili kapasite metriklerini (vCPU, bellek) beraber değerlendirin.
+
+[8] [UYARI] ÖN-ARIZA ÖRÜNTÜSÜ — Tarihsel Arıza Sinyali: Yavaş Yanıt (Erken Uyarı)
+     'Yavaş Yanıt (Erken Uyarı)' log tipi, geçmiş 15 incidentte arızadan ortalama 68 saat önce +287% artış gösterdi (güven: 100%). Mevcut veriler bu örüntüyle örtüşüyor.
+     Aksiyonlar:
+       1. 'Yavaş Yanıt (Erken Uyarı)' tipindeki logların son trendini inceleyip müdahale planı hazırlayın.
+       2. Benzer geçmiş incident'lerin kök neden analizini gözden geçirin.
+       3. İlgili OpenStack servislerinde önleyici bakım (restart, config review) yapın.
+
+[9] [UYARI] STAJ — Yaz Stajı 2026 Aktif — 0 Gün Kaldı
+     Aktif staj dönemi: 2026-06-01 → 2026-07-01. Beklenen ek yük: +310 vCPU, Bellek +13%, Hata +3.5%.
+     Aksiyonlar:
+       1. Nova scheduler ağırlıklarını ve host aggregate'leri kontrol edin.
+       2. Keystone proje kotalarını doğrulayın — +310 ek vCPU için yeterli mi?
+       3. Quota exceeded ve resource_exhausted hatalarındaki artışları izleyin.
+       4. Staj bitiminde VM'lerin temizlenmesi için kullanıcılara bildirim gönderin.

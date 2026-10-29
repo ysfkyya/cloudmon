@@ -1,0 +1,290 @@
+{
+  "vcpu_usage_percent_24h": {
+    "resource": "vcpu_usage_percent",
+    "horizon_h": 24,
+    "models": {
+      "Linear Regression": {
+        "MAE": 0.9051,
+        "RMSE": 1.2929,
+        "R2": 0.9577,
+        "MAPE": 1.099
+      },
+      "Random Forest": {
+        "MAE": 4.4963,
+        "RMSE": 6.1418,
+        "R2": 0.0456,
+        "MAPE": 5.2486
+      },
+      "Gradient Boosting": {
+        "MAE": 4.3037,
+        "RMSE": 5.9377,
+        "R2": 0.1079,
+        "MAPE": 5.017
+      },
+      "XGBoost": {
+        "MAE": 4.482,
+        "RMSE": 6.1741,
+        "R2": 0.0355,
+        "MAPE": 5.2245
+      },
+      "LightGBM": {
+        "MAE": 4.291,
+        "RMSE": 5.9953,
+        "R2": 0.0906,
+        "MAPE": 4.9922
+      },
+      "CatBoost": {
+        "MAE": 7.8522,
+        "RMSE": 9.71,
+        "R2": -1.3855,
+        "MAPE": 9.2972
+      },
+      "MLP": {
+        "MAE": 4.3276,
+        "RMSE": 6.1133,
+        "R2": 0.0544,
+        "MAPE": 5.2341
+      }
+    }
+  },
+  "memory_usage_percent_24h": {
+    "resource": "memory_usage_percent",
+    "horizon_h": 24,
+    "models": {
+      "Linear Regression": {
+        "MAE": 2.1254,
+        "RMSE": 3.3819,
+        "R2": 0.7945,
+        "MAPE": 2.3738
+      },
+      "Random Forest": {
+        "MAE": 4.3836,
+        "RMSE": 5.6655,
+        "R2": 0.4234,
+        "MAPE": 4.8101
+      },
+      "Gradient Boosting": {
+        "MAE": 4.4143,
+        "RMSE": 5.7472,
+        "R2": 0.4067,
+        "MAPE": 4.838
+      },
+      "XGBoost": {
+        "MAE": 4.5187,
+        "RMSE": 5.9234,
+        "R2": 0.3697,
+        "MAPE": 4.9454
+      },
+      "LightGBM": {
+        "MAE": 4.4281,
+        "RMSE": 5.9033,
+        "R2": 0.374,
+        "MAPE": 4.8344
+      },
+      "CatBoost": {
+        "MAE": 5.1914,
+        "RMSE": 6.9034,
+        "R2": 0.1439,
+        "MAPE": 5.6662
+      },
+      "MLP": {
+        "MAE": 4.0228,
+        "RMSE": 5.6451,
+        "R2": 0.4276,
+        "MAPE": 4.5572
+      }
+    }
+  },
+  "disk_usage_percent_24h": {
+    "resource": "disk_usage_percent",
+    "horizon_h": 24,
+    "models": {
+      "Linear Regression": {
+        "MAE": 1.6792,
+        "RMSE": 2.7694,
+        "R2": 0.6984,
+        "MAPE": 2.0685
+      },
+      "Random Forest": {
+        "MAE": 7.3101,
+        "RMSE": 8.9521,
+        "R2": -2.1512,
+        "MAPE": 8.8556
+      },
+      "Gradient Boosting": {
+        "MAE": 11.1993,
+        "RMSE": 13.4486,
+        "R2": -6.1119,
+        "MAPE": 13.6235
+      },
+      "XGBoost": {
+        "MAE": 6.8345,
+        "RMSE": 8.4441,
+        "R2": -1.8037,
+        "MAPE": 8.2701
+      },
+      "LightGBM": {
+        "MAE": 6.7634,
+        "RMSE": 8.3464,
+        "R2": -1.7392,
+        "MAPE": 8.1856
+      },
+      "CatBoost": {
+        "MAE": 7.6745,
+        "RMSE": 9.1966,
+        "R2": -2.3257,
+        "MAPE": 9.3424
+      },
+      "MLP": {
+        "MAE": 3.2982,
+        "RMSE": 4.4248,
+        "R2": 0.2301,
+        "MAPE": 4.0574
+      }
+    }
+  },
+  "vcpu_usage_percent_72h": {
+    "resource": "vcpu_usage_percent",
+    "horizon_h": 72,
+    "models": {
+      "Linear Regression": {
+        "MAE": 1.8648,
+        "RMSE": 2.9505,
+        "R2": 0.7728,
+        "MAPE": 2.222
+      },
+      "Random Forest": {
+        "MAE": 6.1283,
+        "RMSE": 7.7583,
+        "R2": -0.5707,
+        "MAPE": 7.2193
+      },
+      "Gradient Boosting": {
+        "MAE": 6.4734,
+        "RMSE": 7.9596,
+        "R2": -0.6533,
+        "MAPE": 7.6651
+      },
+      "XGBoost": {
+        "MAE": 6.7494,
+        "RMSE": 8.1868,
+        "R2": -0.749,
+        "MAPE": 8.008
+      },
+      "LightGBM": {
+        "MAE": 6.5221,
+        "RMSE": 8.0019,
+        "R2": -0.6709,
+        "MAPE": 7.7275
+      },
+      "CatBoost": {
+        "MAE": 10.7391,
+        "RMSE": 12.2504,
+        "R2": -2.9162,
+        "MAPE": 12.8591
+      },
+      "MLP": {
+        "MAE": 3.7797,
+        "RMSE": 5.1993,
+        "R2": 0.2946,
+        "MAPE": 4.6439
+      }
+    }
+  },
+  "memory_usage_percent_72h": {
+    "resource": "memory_usage_percent",
+    "horizon_h": 72,
+    "models": {
+      "Linear Regression": {
+        "MAE": 4.3523,
+        "RMSE": 5.9499,
+        "R2": 0.3414,
+        "MAPE": 4.9411
+      },
+      "Random Forest": {
+        "MAE": 12.2808,
+        "RMSE": 14.3745,
+        "R2": -2.8442,
+        "MAPE": 13.6624
+      },
+      "Gradient Boosting": {
+        "MAE": 8.9059,
+        "RMSE": 10.6354,
+        "R2": -1.1044,
+        "MAPE": 9.8653
+      },
+      "XGBoost": {
+        "MAE": 7.691,
+        "RMSE": 9.2829,
+        "R2": -0.6032,
+        "MAPE": 8.5175
+      },
+      "LightGBM": {
+        "MAE": 7.1491,
+        "RMSE": 8.6864,
+        "R2": -0.4038,
+        "MAPE": 7.9098
+      },
+      "CatBoost": {
+        "MAE": 9.853,
+        "RMSE": 11.4679,
+        "R2": -1.4467,
+        "MAPE": 10.976
+      },
+      "MLP": {
+        "MAE": 3.8168,
+        "RMSE": 5.9307,
+        "R2": 0.3456,
+        "MAPE": 4.3524
+      }
+    }
+  },
+  "disk_usage_percent_72h": {
+    "resource": "disk_usage_percent",
+    "horizon_h": 72,
+    "models": {
+      "Linear Regression": {
+        "MAE": 5.3012,
+        "RMSE": 9.1156,
+        "R2": -2.4035,
+        "MAPE": 6.5409
+      },
+      "Random Forest": {
+        "MAE": 8.1941,
+        "RMSE": 9.5258,
+        "R2": -2.7168,
+        "MAPE": 9.9864
+      },
+      "Gradient Boosting": {
+        "MAE": 9.471,
+        "RMSE": 11.1803,
+        "R2": -4.1199,
+        "MAPE": 11.5503
+      },
+      "XGBoost": {
+        "MAE": 7.1654,
+        "RMSE": 8.5906,
+        "R2": -2.0228,
+        "MAPE": 8.6977
+      },
+      "LightGBM": {
+        "MAE": 7.2892,
+        "RMSE": 8.7119,
+        "R2": -2.1087,
+        "MAPE": 8.8502
+      },
+      "CatBoost": {
+        "MAE": 10.6646,
+        "RMSE": 11.7958,
+        "R2": -4.6992,
+        "MAPE": 13.1034
+      },
+      "MLP": {
+        "MAE": 3.1368,
+        "RMSE": 4.3606,
+        "R2": 0.2212,
+        "MAPE": 3.8394
+      }
+    }
+  }
+}

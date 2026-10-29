@@ -1,0 +1,239 @@
+{
+  "recommendations": [
+    {
+      "severity": "critical",
+      "category": "LOG ANOMALİSİ",
+      "title": "Kota Aşımı — Anormal Artış (z=4.5, 0.8x normal)",
+      "detail": "Son 24 saatte 'Kota Aşımı' log sayısı normalin 0.8 katına çıktı (z-skor: 4.5). Bu erken uyarı sinyali yaklaşan bir soruna işaret edebilir.",
+      "actions": [
+        "Keystone proje kotalarını gözden geçirin; staj kullanıcıları kota aşımına yol açıyor olabilir.",
+        "Son 6 saatin servis loglarını ayrıntılı inceleyin.",
+        "İlgili kapasite metriklerini (vCPU, bellek) beraber değerlendirin."
+      ],
+      "timestamp": "2026-06-30 23:00:00"
+    },
+    {
+      "severity": "critical",
+      "category": "CASCADE RİSKİ",
+      "title": "Çok Servisli Bozulma Tespit Edildi (2026-06-28 08:00:00)",
+      "detail": "Birden fazla OpenStack servisi aynı anda anomali gösterdi (1.0 saat boyunca). Bu örüntü sistemik bir sorunun habercisi olabilir.",
+      "actions": [
+        "Nova, Neutron ve Keystone servis durumlarını eş zamanlı kontrol edin.",
+        "OpenStack health-check komutunu çalıştırın: openstack service list.",
+        "RabbitMQ kuyruk derinliğini ve DB bağlantı sayısını inceleyin.",
+        "Tüm compute ve network node'larında agent durumunu doğrulayın."
+      ],
+      "timestamp": "2026-06-30 23:00:00"
+    },
+    {
+      "severity": "warning",
+      "category": "KAPASİTE",
+      "title": "vCPU Tahsis Oranı — Tahmini Eşik Tarihi: 2026-09-12",
+      "detail": "Mevcut vCPU Tahsis Oranı: 79.6% (eşik: 90.0%). 30 günlük medyan artış: +0.275%/gün. Tahmini eşik tarihi: 2026-09-12 (~2.4 ay / ~74 gün). En etkili SHAP özelliği: 'vm_count_rmean_24h'.",
+      "actions": [
+        "Yeni compute node alımı için satın alma sürecini başlatın (temin süresi ~60 gün).",
+        "vCPU overcommit oranını gözden geçirin; kullanılmayan instance'ları sonlandırın.",
+        "Büyük flavour talepleri için Nova scheduler ağırlıklarını kısıtlayın.",
+        "Staj dönemlerine denk geliyorsa kullanıcı vCPU kotalarını daraltın."
+      ],
+      "estimated_date": "2026-09-12",
+      "days_remaining": 74,
+      "months_remaining": 2.4,
+      "timestamp": "2026-06-30 23:00:00"
+    },
+    {
+      "severity": "warning",
+      "category": "KAPASİTE",
+      "title": "Bellek Kullanımı — Tahmini Eşik Tarihi: 2026-08-15",
+      "detail": "Mevcut Bellek Kullanımı: 85.5% (eşik: 88.0%). 30 günlük medyan artış: +0.151%/gün. Tahmini eşik tarihi: 2026-08-15 (~1.5 ay / ~46 gün). En etkili SHAP özelliği: 'vm_count_rmean_24h'.",
+      "actions": [
+        "Bellek sızıntısı şüpheli VM'leri ve servisleri inceleyin.",
+        "Nova memory_mb_used değerini Keystone proje kotalarıyla karşılaştırın.",
+        "Büyük bellek tahsisi yapan VM'leri daha az yoğun node'lara taşıyın."
+      ],
+      "estimated_date": "2026-08-15",
+      "days_remaining": 46,
+      "months_remaining": 1.5,
+      "timestamp": "2026-06-30 23:00:00"
+    },
+    {
+      "severity": "warning",
+      "category": "LOG ANOMALİSİ",
+      "title": "Disk I/O Hatası — Anormal Artış (z=3.6, 0.4x normal)",
+      "detail": "Son 24 saatte 'Disk I/O Hatası' log sayısı normalin 0.4 katına çıktı (z-skor: 3.6). Bu erken uyarı sinyali yaklaşan bir soruna işaret edebilir.",
+      "actions": [
+        "Cinder backend sağlığını ve iSCSI bağlantılarını denetleyin.",
+        "Son 6 saatin servis loglarını ayrıntılı inceleyin.",
+        "İlgili kapasite metriklerini (vCPU, bellek) beraber değerlendirin."
+      ],
+      "timestamp": "2026-06-30 23:00:00"
+    },
+    {
+      "severity": "warning",
+      "category": "LOG ANOMALİSİ",
+      "title": "Ağ Hatası — Anormal Artış (z=2.8, 0.4x normal)",
+      "detail": "Son 24 saatte 'Ağ Hatası' log sayısı normalin 0.4 katına çıktı (z-skor: 2.8). Bu erken uyarı sinyali yaklaşan bir soruna işaret edebilir.",
+      "actions": [
+        "Neutron OVS agent durumunu ve VLAN yapılandırmalarını kontrol edin.",
+        "Son 6 saatin servis loglarını ayrıntılı inceleyin.",
+        "İlgili kapasite metriklerini (vCPU, bellek) beraber değerlendirin."
+      ],
+      "timestamp": "2026-06-30 23:00:00"
+    },
+    {
+      "severity": "warning",
+      "category": "LOG ANOMALİSİ",
+      "title": "DB Bağlantı Hatası — Anormal Artış (z=2.6, 1.2x normal)",
+      "detail": "Son 24 saatte 'DB Bağlantı Hatası' log sayısı normalin 1.2 katına çıktı (z-skor: 2.6). Bu erken uyarı sinyali yaklaşan bir soruna işaret edebilir.",
+      "actions": [
+        "MySQL/MariaDB max_connections parametresini artırın; bağlantı havuzu sağlığını izleyin.",
+        "Son 6 saatin servis loglarını ayrıntılı inceleyin.",
+        "İlgili kapasite metriklerini (vCPU, bellek) beraber değerlendirin."
+      ],
+      "timestamp": "2026-06-30 23:00:00"
+    },
+    {
+      "severity": "warning",
+      "category": "ÖN-ARIZA ÖRÜNTÜSÜ",
+      "title": "Tarihsel Arıza Sinyali: Yavaş Yanıt (Erken Uyarı)",
+      "detail": "'Yavaş Yanıt (Erken Uyarı)' log tipi, geçmiş 15 incidentte arızadan ortalama 68 saat önce +287% artış gösterdi (güven: 100%). Mevcut veriler bu örüntüyle örtüşüyor.",
+      "actions": [
+        "'Yavaş Yanıt (Erken Uyarı)' tipindeki logların son trendini inceleyip müdahale planı hazırlayın.",
+        "Benzer geçmiş incident'lerin kök neden analizini gözden geçirin.",
+        "İlgili OpenStack servislerinde önleyici bakım (restart, config review) yapın."
+      ],
+      "timestamp": "2026-06-30 23:00:00"
+    },
+    {
+      "severity": "warning",
+      "category": "STAJ",
+      "title": "Yaz Stajı 2026 Aktif — 0 Gün Kaldı",
+      "detail": "Aktif staj dönemi: 2026-06-01 → 2026-07-01. Beklenen ek yük: +310 vCPU, Bellek +13%, Hata +3.5%.",
+      "actions": [
+        "Nova scheduler ağırlıklarını ve host aggregate'leri kontrol edin.",
+        "Keystone proje kotalarını doğrulayın — +310 ek vCPU için yeterli mi?",
+        "Quota exceeded ve resource_exhausted hatalarındaki artışları izleyin.",
+        "Staj bitiminde VM'lerin temizlenmesi için kullanıcılara bildirim gönderin."
+      ],
+      "timestamp": "2026-06-30 23:00:00"
+    }
+  ],
+  "capacity_summary": {
+    "vcpu_usage_percent": {
+      "resource": "vcpu_usage_percent",
+      "current_value": 79.63,
+      "threshold": 90.0,
+      "daily_trend": 0.2752,
+      "days_to_threshold": 74.0,
+      "months_to_threshold": 2.4,
+      "estimated_date": "2026-09-12",
+      "stable": false,
+      "method": "ML-Linear Regression",
+      "as_of": "2026-06-30 23:00:00"
+    },
+    "memory_usage_percent": {
+      "resource": "memory_usage_percent",
+      "current_value": 85.52,
+      "threshold": 88.0,
+      "daily_trend": 0.1512,
+      "days_to_threshold": 46.0,
+      "months_to_threshold": 1.5,
+      "estimated_date": "2026-08-15",
+      "stable": false,
+      "method": "ML-Linear Regression",
+      "as_of": "2026-06-30 23:00:00"
+    },
+    "disk_usage_percent": {
+      "resource": "disk_usage_percent",
+      "current_value": 80.05,
+      "threshold": 85.0,
+      "days_to_threshold": null,
+      "months_to_threshold": null,
+      "estimated_date": null,
+      "stable": true,
+      "daily_trend": 0.0,
+      "method": "ML-Linear Regression",
+      "as_of": "2026-06-30 23:00:00"
+    }
+  },
+  "error_summary": {
+    "Timeout": {
+      "last_7d": 105,
+      "prev_7d": 2985,
+      "change_pct": -96.5,
+      "high": false
+    },
+    "DB Bağlantı": {
+      "last_7d": 19,
+      "prev_7d": 1153,
+      "change_pct": -98.4,
+      "high": false
+    },
+    "Kaynak Tükenmesi": {
+      "last_7d": 157,
+      "prev_7d": 3810,
+      "change_pct": -95.9,
+      "high": false
+    },
+    "Kota Aşımı": {
+      "last_7d": 7,
+      "prev_7d": 741,
+      "change_pct": -99.1,
+      "high": false
+    },
+    "Kimlik Doğrulama": {
+      "last_7d": 45,
+      "prev_7d": 581,
+      "change_pct": -92.3,
+      "high": false
+    },
+    "Ağ Hatası": {
+      "last_7d": 16,
+      "prev_7d": 773,
+      "change_pct": -97.9,
+      "high": false
+    },
+    "Zamanlayıcı": {
+      "last_7d": 29,
+      "prev_7d": 1448,
+      "change_pct": -98.0,
+      "high": false
+    },
+    "Yavaş Yanıt": {
+      "last_7d": 1285,
+      "prev_7d": 3058,
+      "change_pct": -58.0,
+      "high": true
+    },
+    "Bellek Baskısı": {
+      "last_7d": 3096,
+      "prev_7d": 4034,
+      "change_pct": -23.3,
+      "high": true
+    },
+    "Bağlantı Havuzu": {
+      "last_7d": 2046,
+      "prev_7d": 3659,
+      "change_pct": -44.1,
+      "high": true
+    },
+    "Zamanlayıcı Bozulma": {
+      "last_7d": 2575,
+      "prev_7d": 3331,
+      "change_pct": -22.7,
+      "high": true
+    },
+    "Cascade Göstergesi": {
+      "last_7d": 1078,
+      "prev_7d": 1681,
+      "change_pct": -35.9,
+      "high": true
+    },
+    "CRITICAL Log": {
+      "last_7d": 3,
+      "prev_7d": 64,
+      "change_pct": -95.3,
+      "high": false
+    }
+  }
+}
